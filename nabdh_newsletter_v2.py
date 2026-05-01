@@ -84,7 +84,7 @@ def safe_truncate(text: str, limit: int) -> str:
 
 def load_logo() -> str:
     """Load Waves logo as base64 data URI. Tries SVG first, then PNG."""
-    for name in ["waves-logo.svg","waves_logo.svg","waves-logo.png","waves_logo.png","logo.svg","logo.png"]:
+    for name in ["waveslogo-white.png","waves-logo.svg","waves_logo.svg","waves-logo.png","waves_logo.png","logo.svg","logo.png"]:
         p = Path(name)
         if p.exists():
             data = base64.b64encode(p.read_bytes()).decode()
