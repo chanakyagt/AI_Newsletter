@@ -94,9 +94,27 @@ def load_logo() -> str:
     print("  [LOGO] WARNING: No logo file found. Place waves-logo.svg in same directory.")
     return ""
 
+_EDITION_COUNTER = OUTPUT_DIR / "edition_counter.json"
+
 def get_edition_number() -> int:
+    override = os.environ.get("NABDH_EDITION_OVERRIDE", "").strip()
+    if override.isdigit():
+        return int(override)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    return len(list(OUTPUT_DIR.glob("nabdh_*.html"))) + 1
+    if _EDITION_COUNTER.exists():
+        try:
+            data = json.loads(_EDITION_COUNTER.read_text(encoding="utf-8"))
+            return int(data.get("next_edition", 1))
+        except Exception:
+            pass
+    return 1
+
+def _increment_edition_number():
+    current = get_edition_number()
+    _EDITION_COUNTER.write_text(
+        json.dumps({"next_edition": current + 1}, indent=2),
+        encoding="utf-8"
+    )
 
 # ═══════════════════════════════════════════════════════════
 # DATA LOADING
@@ -1005,6 +1023,8 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = OUTPUT_DIR / f"nabdh_{DATE_STR}.html"
     out_path.write_text(html, encoding="utf-8")
+    _increment_edition_number()
+    print(f"  [EDITION] Counter updated → next edition will be {get_edition_number()}")
 
     pdf_path = None
     if args.pdf:

@@ -1,16 +1,17 @@
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 # ── Bootstrap ────────────────────────────────────────────────────────────────
@@ -19,6 +20,8 @@ ROOT = Path(__file__).parent.parent.resolve()
 load_dotenv(ROOT / ".env")
 
 app = FastAPI(title="NABDH Pipeline")
+
+LOCK_FILE = ROOT / "news_output" / ".pipeline.lock"
 
 # ── Global state ─────────────────────────────────────────────────────────────
 
@@ -59,6 +62,11 @@ async def startup() -> None:
     _loop = asyncio.get_running_loop()
     log_queue = asyncio.Queue(maxsize=1000)
     _refresh_newsletter_path()
+    # Clear any stale lock from a previous crashed run
+    if LOCK_FILE.exists():
+        age = time.time() - LOCK_FILE.stat().st_mtime
+        if age > 10800:
+            LOCK_FILE.unlink()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -70,16 +78,13 @@ def _ts() -> str:
 def _push(event: dict) -> None:
     if _loop is None or log_queue is None:
         return
-    asyncio.run_coroutine_threadsafe(
-        _safe_put(event), _loop
-    )
+    asyncio.run_coroutine_threadsafe(_safe_put(event), _loop)
 
 
 async def _safe_put(event: dict) -> None:
     try:
         log_queue.put_nowait(event)
     except asyncio.QueueFull:
-        # Drop oldest to make room
         try:
             log_queue.get_nowait()
         except asyncio.QueueEmpty:
@@ -90,10 +95,13 @@ async def _safe_put(event: dict) -> None:
             pass
 
 
-def _find_newsletter() -> str | None:
-    pattern = ROOT / "news_output" / "newsletter" / "nabdh_*.html"
+def _find_newsletter(file: str = None) -> str | None:
+    newsletter_dir = ROOT / "news_output" / "newsletter"
+    if file:
+        p = newsletter_dir / file
+        return str(p) if p.exists() else None
     candidates = sorted(
-        Path(ROOT / "news_output" / "newsletter").glob("nabdh_*.html"),
+        newsletter_dir.glob("nabdh_*.html"),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -104,12 +112,60 @@ def _refresh_newsletter_path() -> None:
     pipeline_state["newsletter_path"] = _find_newsletter()
 
 
+# ── Lock ──────────────────────────────────────────────────────────────────────
+
+def _acquire_lock() -> bool:
+    if LOCK_FILE.exists():
+        age = time.time() - LOCK_FILE.stat().st_mtime
+        if age < 10800:
+            return False
+        LOCK_FILE.unlink()
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LOCK_FILE.write_text(str(os.getpid()))
+    return True
+
+
+def _release_lock() -> None:
+    if LOCK_FILE.exists():
+        try:
+            LOCK_FILE.unlink()
+        except OSError:
+            pass
+
+
+# ── Fresh run cleanup ─────────────────────────────────────────────────────────
+
+def _clean_for_fresh_run() -> None:
+    dirs_to_delete = [
+        ROOT / "news_output" / "english",
+        ROOT / "news_output" / "arabic",
+        ROOT / "news_output" / "arabic_translated",
+        ROOT / "news_output" / "combined",
+        ROOT / "news_output" / "deduped",
+        ROOT / "news_output" / "scored",
+        ROOT / "news_output" / "firecrawled",
+        ROOT / "news_output" / "keypoints",
+    ]
+    deleted = []
+    for d in dirs_to_delete:
+        if d.exists():
+            shutil.rmtree(d)
+            deleted.append(d.name)
+
+    if deleted:
+        _push({"type": "log",
+               "text": f"🧹 Cleared previous run data: {', '.join(deleted)}",
+               "step": 0, "progress": 0, "timestamp": _ts()})
+    _push({"type": "log",
+           "text": "✅ Fresh start — all steps will run on today's news",
+           "step": 0, "progress": 0, "timestamp": _ts()})
+
+
 # ── Humanise ─────────────────────────────────────────────────────────────────
 
 def _humanise(line: str, step: int) -> str | None:
     l = line.strip()
 
-    # Suppress decorative separator lines
     if ("═" * 5 in l) or ("─" * 5 in l) or l.startswith("===") or l.startswith("---"):
         return None
 
@@ -203,6 +259,8 @@ def _humanise(line: str, step: int) -> str | None:
         return "✍️  Writing story hooks..."
     if "Generating closing" in l or "[3/3]" in l:
         return "✍️  Writing closing section..."
+    if "[EDITION]" in l:
+        return f"🔢 {l.replace('[EDITION]', '').strip()}"
     if "nabdh_" in l and ".html" in l:
         return "✅ Newsletter HTML generated"
     if "SAVED" in l and ".html" in l:
@@ -257,7 +315,62 @@ def _run_script_streaming(script_name: str, step_num: int, step_label: str) -> i
 
 def _run_full_pipeline() -> None:
     global pipeline_state
-    for step_num, script, label in STEPS:
+    try:
+        _clean_for_fresh_run()
+
+        for step_num, script, label in STEPS:
+            pipeline_state["current_step"] = label
+            pipeline_state["progress"] = STEP_PROGRESS[step_num]
+            _push({
+                "type": "step_start",
+                "text": label,
+                "step": step_num,
+                "progress": STEP_PROGRESS[step_num],
+                "timestamp": _ts(),
+            })
+
+            rc = _run_script_streaming(script, step_num, label)
+
+            if rc != 0:
+                pipeline_state["status"] = "error"
+                pipeline_state["error"] = f"{label} failed (exit code {rc})"
+                pipeline_state["finished_at"] = datetime.now().isoformat()
+                _push({
+                    "type": "error",
+                    "text": f"❌ {label} failed. Check logs above.",
+                    "step": step_num,
+                    "progress": STEP_PROGRESS[step_num],
+                    "timestamp": _ts(),
+                })
+                return
+
+            _push({
+                "type": "step_done",
+                "text": f"✅ {label} complete",
+                "step": step_num,
+                "progress": STEP_PROGRESS[step_num] + 5,
+                "timestamp": _ts(),
+            })
+
+        pipeline_state["status"] = "done"
+        pipeline_state["progress"] = 100
+        pipeline_state["finished_at"] = datetime.now().isoformat()
+        _refresh_newsletter_path()
+        _push({
+            "type": "done",
+            "text": "🎉 NABDH newsletter is ready.",
+            "step": 7,
+            "progress": 100,
+            "timestamp": _ts(),
+        })
+    finally:
+        _release_lock()
+
+
+def _run_newsletter_only() -> None:
+    global pipeline_state
+    try:
+        step_num, script, label = STEPS[6]  # Step 7
         pipeline_state["current_step"] = label
         pipeline_state["progress"] = STEP_PROGRESS[step_num]
         _push({
@@ -283,131 +396,87 @@ def _run_full_pipeline() -> None:
             })
             return
 
-        _push({
-            "type": "step_done",
-            "text": f"✅ {label} complete",
-            "step": step_num,
-            "progress": STEP_PROGRESS[step_num] + 5,
-            "timestamp": _ts(),
-        })
-
-    pipeline_state["status"] = "done"
-    pipeline_state["progress"] = 100
-    pipeline_state["finished_at"] = datetime.now().isoformat()
-    _refresh_newsletter_path()
-    _push({
-        "type": "done",
-        "text": "🎉 NABDH newsletter is ready.",
-        "step": 7,
-        "progress": 100,
-        "timestamp": _ts(),
-    })
-
-
-def _run_newsletter_only() -> None:
-    global pipeline_state
-    step_num, script, label = STEPS[6]  # Step 7
-    pipeline_state["current_step"] = label
-    pipeline_state["progress"] = STEP_PROGRESS[step_num]
-    _push({
-        "type": "step_start",
-        "text": label,
-        "step": step_num,
-        "progress": STEP_PROGRESS[step_num],
-        "timestamp": _ts(),
-    })
-
-    rc = _run_script_streaming(script, step_num, label)
-
-    if rc != 0:
-        pipeline_state["status"] = "error"
-        pipeline_state["error"] = f"{label} failed (exit code {rc})"
+        pipeline_state["status"] = "done"
+        pipeline_state["progress"] = 100
         pipeline_state["finished_at"] = datetime.now().isoformat()
+        _refresh_newsletter_path()
         _push({
-            "type": "error",
-            "text": f"❌ {label} failed. Check logs above.",
-            "step": step_num,
-            "progress": STEP_PROGRESS[step_num],
+            "type": "done",
+            "text": "🎉 Newsletter regenerated and ready.",
+            "step": 7,
+            "progress": 100,
             "timestamp": _ts(),
         })
-        return
-
-    pipeline_state["status"] = "done"
-    pipeline_state["progress"] = 100
-    pipeline_state["finished_at"] = datetime.now().isoformat()
-    _refresh_newsletter_path()
-    _push({
-        "type": "done",
-        "text": "🎉 Newsletter regenerated and ready.",
-        "step": 7,
-        "progress": 100,
-        "timestamp": _ts(),
-    })
+    finally:
+        _release_lock()
 
 
 def _run_editorial_only() -> None:
     global pipeline_state, active_process
-    pipeline_state["current_step"] = "Editorial Regeneration"
-    pipeline_state["progress"] = 50
-    _push({
-        "type": "step_start",
-        "text": "Regenerating editorial section...",
-        "step": 7,
-        "progress": 50,
-        "timestamp": _ts(),
-    })
-
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
-    active_process = subprocess.Popen(
-        [sys.executable, "run_pipeline.py", "--redo-editorial"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        encoding="utf-8",
-        errors="replace",
-        env=env,
-        cwd=ROOT,
-    )
-    for raw_line in active_process.stdout:
-        line = raw_line.rstrip()
-        if not line:
-            continue
-        human = _humanise(line, 7)
-        if human is None:
-            continue
+    try:
+        pipeline_state["current_step"] = "Editorial Regeneration"
+        pipeline_state["progress"] = 50
         _push({
-            "type": "log",
-            "text": human,
-            "step": 7,
-            "progress": None,
-            "timestamp": _ts(),
-        })
-    active_process.wait()
-    rc = active_process.returncode
-
-    if rc != 0:
-        pipeline_state["status"] = "error"
-        pipeline_state["error"] = f"Editorial regeneration failed (exit code {rc})"
-        pipeline_state["finished_at"] = datetime.now().isoformat()
-        _push({
-            "type": "error",
-            "text": "❌ Editorial regeneration failed. Check logs above.",
+            "type": "step_start",
+            "text": "Regenerating editorial section...",
             "step": 7,
             "progress": 50,
             "timestamp": _ts(),
         })
-        return
 
-    pipeline_state["status"] = "done"
-    pipeline_state["progress"] = 100
-    pipeline_state["finished_at"] = datetime.now().isoformat()
-    _refresh_newsletter_path()
-    _push({
-        "type": "done",
-        "text": "🎉 Editorial section regenerated.",
-        "step": 7,
-        "progress": 100,
-        "timestamp": _ts(),
-    })
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+        active_process = subprocess.Popen(
+            [sys.executable, "run_pipeline.py", "--redo-editorial"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            cwd=ROOT,
+        )
+        for raw_line in active_process.stdout:
+            line = raw_line.rstrip()
+            if not line:
+                continue
+            human = _humanise(line, 7)
+            if human is None:
+                continue
+            _push({
+                "type": "log",
+                "text": human,
+                "step": 7,
+                "progress": None,
+                "timestamp": _ts(),
+            })
+        active_process.wait()
+        rc = active_process.returncode
+
+        if rc != 0:
+            pipeline_state["status"] = "error"
+            pipeline_state["error"] = f"Editorial regeneration failed (exit code {rc})"
+            pipeline_state["finished_at"] = datetime.now().isoformat()
+            _push({
+                "type": "error",
+                "text": "❌ Editorial regeneration failed. Check logs above.",
+                "step": 7,
+                "progress": 50,
+                "timestamp": _ts(),
+            })
+            return
+
+        pipeline_state["status"] = "done"
+        pipeline_state["progress"] = 100
+        pipeline_state["finished_at"] = datetime.now().isoformat()
+        _refresh_newsletter_path()
+        _push({
+            "type": "done",
+            "text": "🎉 Editorial section regenerated.",
+            "step": 7,
+            "progress": 100,
+            "timestamp": _ts(),
+        })
+    finally:
+        _release_lock()
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -418,8 +487,20 @@ async def index():
 
 
 @app.get("/api/status")
-async def status():
-    return {**pipeline_state}
+async def get_status():
+    newsletter = _find_newsletter()
+    return {
+        "status":           pipeline_state["status"],
+        "mode":             pipeline_state["mode"],
+        "progress":         pipeline_state["progress"],
+        "current_step":     pipeline_state["current_step"],
+        "started_at":       pipeline_state["started_at"],
+        "finished_at":      pipeline_state["finished_at"],
+        "error":            pipeline_state["error"],
+        "newsletter_ready": newsletter is not None,
+        "newsletter_name":  Path(newsletter).name if newsletter else None,
+        "newsletter_path":  newsletter,
+    }
 
 
 def _start_thread(target) -> None:
@@ -429,7 +510,9 @@ def _start_thread(target) -> None:
 @app.post("/api/run")
 async def run_pipeline():
     if pipeline_state["status"] == "running":
-        return JSONResponse({"error": "Pipeline is already running"}, status_code=409)
+        return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
+    if not _acquire_lock():
+        return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
     pipeline_state.update({
         "status": "running",
         "mode": "full",
@@ -446,7 +529,9 @@ async def run_pipeline():
 @app.post("/api/run/newsletter")
 async def run_newsletter():
     if pipeline_state["status"] == "running":
-        return JSONResponse({"error": "Pipeline is already running"}, status_code=409)
+        return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
+    if not _acquire_lock():
+        return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
     pipeline_state.update({
         "status": "running",
         "mode": "newsletter",
@@ -463,7 +548,9 @@ async def run_newsletter():
 @app.post("/api/run/editorial")
 async def run_editorial():
     if pipeline_state["status"] == "running":
-        return JSONResponse({"error": "Pipeline is already running"}, status_code=409)
+        return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
+    if not _acquire_lock():
+        return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
     pipeline_state.update({
         "status": "running",
         "mode": "editorial",
@@ -482,15 +569,16 @@ async def cancel_pipeline():
     global active_process
     if active_process and active_process.poll() is None:
         active_process.terminate()
-        pipeline_state["status"] = "idle"
-        pipeline_state["error"] = "Cancelled by user"
-        _push({
-            "type": "error",
-            "text": "⛔ Pipeline cancelled.",
-            "step": None,
-            "progress": pipeline_state["progress"],
-            "timestamp": _ts(),
-        })
+    pipeline_state["status"] = "idle"
+    pipeline_state["error"] = "Cancelled by user"
+    _release_lock()
+    _push({
+        "type": "error",
+        "text": "⛔ Pipeline cancelled.",
+        "step": None,
+        "progress": pipeline_state["progress"],
+        "timestamp": _ts(),
+    })
     return {"ok": True}
 
 
@@ -509,16 +597,101 @@ async def stream(request: Request):
 
 
 @app.get("/api/newsletter")
-async def get_newsletter(download: bool = False):
-    path = _find_newsletter()
-    if not path:
-        return JSONResponse({"error": "No newsletter found"}, status_code=404)
-    name = Path(path).name
+async def get_newsletter(file: str = None, download: bool = False):
+    if file:
+        if not file.startswith("nabdh_") or "/" in file or "\\" in file:
+            return JSONResponse({"error": "Invalid filename"}, status_code=400)
+        path = ROOT / "news_output" / "newsletter" / file
+        if not path.exists():
+            return JSONResponse({"error": "File not found"}, status_code=404)
+    else:
+        found = _find_newsletter()
+        if not found:
+            return JSONResponse({"error": "No newsletter found"}, status_code=404)
+        path = Path(found)
+    name = path.name
+    headers = {}
     if download:
-        return FileResponse(
-            path,
-            media_type="text/html",
-            filename=name,
-            headers={"Content-Disposition": f'attachment; filename="{name}"'},
-        )
-    return FileResponse(path, media_type="text/html")
+        headers["Content-Disposition"] = f'attachment; filename="{name}"'
+    return FileResponse(str(path), media_type="text/html", headers=headers)
+
+
+@app.post("/api/newsletter/save")
+async def save_newsletter_edits(request: Request):
+    try:
+        body         = await request.json()
+        html_content = body.get("html", "")
+
+        if len(html_content) < 10000:
+            return JSONResponse({"error": "Content too short — save rejected"}, status_code=400)
+
+        opens  = html_content.count("<div")
+        closes = html_content.count("</div>")
+        if opens != closes:
+            return JSONResponse({
+                "error": (f"HTML structure broken: {opens} opening divs, "
+                          f"{closes} closing divs. Save rejected to protect your file.")
+            }, status_code=400)
+
+        found = _find_newsletter()
+        if not found:
+            return JSONResponse({"error": "No newsletter file found on server"}, status_code=404)
+
+        p           = Path(found)
+        backup_name = f"{p.stem}_edit_{datetime.now().strftime('%H%M%S')}{p.suffix}"
+        backup_path = p.parent / backup_name
+        p.rename(backup_path)
+
+        p.write_text(html_content, encoding="utf-8")
+
+        return JSONResponse({
+            "ok":     True,
+            "saved":  p.name,
+            "backup": backup_name,
+        })
+    except Exception as e:
+        return JSONResponse({"error": f"Save failed: {str(e)}"}, status_code=500)
+
+
+@app.get("/api/history")
+async def get_history():
+    newsletter_dir = ROOT / "news_output" / "newsletter"
+    if not newsletter_dir.exists():
+        return {"newsletters": []}
+
+    files = sorted(
+        [f for f in newsletter_dir.glob("nabdh_????-??-??.html")],
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )[:10]
+
+    return {"newsletters": [
+        {
+            "name":     f.name,
+            "date":     f.stem.replace("nabdh_", ""),
+            "size_kb":  round(f.stat().st_size / 1024, 1),
+            "modified": datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+        }
+        for f in files
+    ]}
+
+
+# RAILWAY DEPLOYMENT CHECKLIST
+# ─────────────────────────────
+# 1. All .env variables must be added in Railway dashboard → Variables
+#    Required: Deepseek_API_Key_1/2/3, OPENAI_API_KEY_1/2/3, FIRECRAWL_API_KEY
+#    Optional: NABDH_EDITION_OVERRIDE (set to "1" for first real run, then remove)
+#
+# 2. news_output/ is created fresh on first run — no need to upload it
+#
+# 3. edition_counter.json is created automatically on first newsletter
+#
+# 4. To reset edition number: set NABDH_EDITION_OVERRIDE=1 in Railway Variables
+#    for one run, then delete that variable so auto-increment resumes
+#
+# 5. Logs are streamed live via SSE — no log files needed on Railway
+#
+# 6. Pipeline takes 18-25 minutes — Railway's HTTP timeout is 5 minutes
+#    SSE keepalive pings every 15 seconds prevent the connection being killed
+#    The pipeline runs in a background thread — timeout only affects the stream
+#    not the pipeline itself. User can refresh and reconnect via /api/status check.

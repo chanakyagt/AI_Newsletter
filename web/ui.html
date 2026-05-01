@@ -355,6 +355,57 @@
   /* ── Cancel button area ── */
   #cancel-wrap { display: none; }
   #cancel-wrap.visible { display: inline-flex; }
+
+  /* ── Edit button ── */
+  .btn-edit {
+    background: var(--navy);
+    color: var(--white);
+    border: none;
+  }
+
+  /* ── Edit container ── */
+  #edit-container { display: none; margin-top: 0; }
+
+  /* ── History table ── */
+  #history-card { display: none; animation: fadeIn .4s ease; }
+
+  .history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .history-table th {
+    text-align: left;
+    padding: 10px 16px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: #888;
+    border-bottom: 1px solid #e8e8f0;
+  }
+  .history-table td {
+    padding: 10px 16px;
+    border-bottom: 1px solid #f4f4f8;
+    color: #333;
+  }
+  .history-table tr:last-child td { border-bottom: none; }
+  .history-table tr:hover td { background: #f9f9fd; }
+  .history-table .hist-actions { display: flex; gap: 6px; }
+  .hist-btn {
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    border: 1.5px solid #ddd;
+    border-radius: 4px;
+    background: transparent;
+    color: #555;
+    cursor: pointer;
+    transition: border-color .15s, color .15s;
+    text-decoration: none;
+    display: inline-block;
+  }
+  .hist-btn:hover { border-color: var(--blue); color: var(--blue); }
 </style>
 </head>
 
@@ -444,7 +495,7 @@
     </div>
   </div>
 
-  <!-- Newsletter card (shown when done) -->
+  <!-- Newsletter card (shown when done or when existing newsletter detected) -->
   <div class="card" id="newsletter-card">
     <div class="newsletter-ready">
       <div class="newsletter-icon">📰</div>
@@ -452,9 +503,10 @@
         <h3>Your newsletter is ready</h3>
         <p id="newsletter-filename">nabdh_*.html</p>
       </div>
-      <div class="newsletter-actions">
+      <div id="newsletter-actions" class="newsletter-actions">
         <button class="btn btn-primary" onclick="openNewsletter()">🔗 Open in New Tab</button>
         <button class="btn btn-success" onclick="downloadNewsletter()">⬇ Download HTML</button>
+        <button class="btn btn-edit"    onclick="enterEditMode()">✏️ Edit Newsletter</button>
       </div>
     </div>
     <div class="rerun-row">
@@ -468,39 +520,85 @@
     </div>
   </div>
 
+  <!-- Edit mode container -->
+  <div id="edit-container">
+    <div style="background:var(--navy);color:white;padding:12px 20px;
+                display:flex;justify-content:space-between;align-items:center;
+                font-family:'JetBrains Mono',monospace;font-size:12px;
+                border-radius:var(--radius) var(--radius) 0 0;">
+      <span>✏️ EDIT MODE — click highlighted text to edit &nbsp;·&nbsp; Escape to cancel</span>
+      <div style="display:flex;gap:8px;">
+        <button id="save-btn" onclick="saveEdits()"
+          style="background:var(--cyan);color:var(--navy);border:none;
+                 padding:8px 18px;font-weight:700;cursor:pointer;
+                 font-family:inherit;border-radius:3px;">
+          💾 Save Changes
+        </button>
+        <button onclick="cancelEdits()"
+          style="background:transparent;color:white;border:1px solid rgba(255,255,255,.4);
+                 padding:8px 18px;cursor:pointer;font-family:inherit;border-radius:3px;">
+          ✕ Cancel
+        </button>
+      </div>
+    </div>
+    <iframe id="newsletter-iframe"
+            style="width:100%;height:80vh;border:2px solid var(--navy);
+                   border-top:none;border-radius:0 0 var(--radius) var(--radius);"
+            src="/api/newsletter">
+    </iframe>
+  </div>
+
+  <!-- Past newsletters -->
+  <div class="card" id="history-card">
+    <div class="card-header">
+      <span class="card-title">Past Newsletters</span>
+    </div>
+    <table class="history-table" id="history-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>File</th>
+          <th>Size</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="history-body"></tbody>
+    </table>
+  </div>
+
 </main>
 
 <script>
 // ── State ─────────────────────────────────────────────────────────────────
 let es = null;
-let currentStep = 0;
-let stepStates = {}; // stepNum -> 'idle' | 'active' | 'done' | 'error'
+let currentStatus = 'idle';
 
 // ── Init ─────────────────────────────────────────────────────────────────
-window.addEventListener('DOMContentLoaded', async () => {
-  const res = await fetch('/api/status');
-  const data = await res.json();
-  applyStatus(data);
-  if (data.status === 'running') {
-    setUIRunning(true);
-    startStreaming();
-  }
-  if (data.status === 'done') {
-    setUIRunning(false);
-    showNewsletterActions(data.newsletter_path);
-    setProgress(100, data.current_step || 'Complete');
-    setStatusDot('done', 'Done');
-  }
-  if (data.status === 'error') {
-    setStatusDot('error', 'Error');
-    showError(data.error || 'An error occurred.');
-  }
-});
+window.addEventListener('load', checkStatusOnLoad);
 
-function applyStatus(data) {
-  if (data.progress !== null && data.progress !== undefined) {
-    setProgress(data.progress, data.current_step || '');
+async function checkStatusOnLoad() {
+  const res    = await fetch('/api/status');
+  const status = await res.json();
+  currentStatus = status.status;
+
+  if (status.status === 'running') {
+    setUIRunning(true);
+    setStatusDot('running', 'Running');
+    if (status.progress) setProgress(status.progress, status.current_step || '');
+    startStreaming();
+  } else if (status.status === 'done') {
+    setStatusDot('done', 'Done');
+    setProgress(100, 'Complete');
+  } else if (status.status === 'error') {
+    setStatusDot('error', 'Error');
+    showError(status.error || 'An error occurred.');
   }
+
+  if (status.newsletter_ready) {
+    showNewsletterCard(status.newsletter_name);
+  }
+
+  loadHistory();
 }
 
 // ── Pipeline actions ──────────────────────────────────────────────────────
@@ -508,18 +606,21 @@ async function runPipeline(mode = 'full') {
   const endpoints = { full: '/api/run', newsletter: '/api/run/newsletter', editorial: '/api/run/editorial' };
   hideError();
   hideNewsletterCard();
+  exitEditMode(true);
   resetSteps();
   clearLog();
   setProgress(0, 'Starting...');
   setStatusDot('running', 'Running');
   setUIRunning(true);
+  currentStatus = 'running';
 
-  const res = await fetch(endpoints[mode], { method: 'POST' });
+  const res  = await fetch(endpoints[mode], { method: 'POST' });
   const data = await res.json();
   if (data.error) {
     showError(data.error);
     setUIRunning(false);
     setStatusDot('error', 'Error');
+    currentStatus = 'error';
     return;
   }
   startStreaming();
@@ -529,6 +630,7 @@ async function cancelPipeline() {
   await fetch('/api/cancel', { method: 'POST' });
   setUIRunning(false);
   setStatusDot('idle', 'Idle');
+  currentStatus = 'idle';
 }
 
 function retryPipeline() {
@@ -562,25 +664,28 @@ function startStreaming() {
       setUIRunning(false);
       setStatusDot('done', 'Done');
       setProgress(100, '🎉 Newsletter ready');
-      showNewsletterActions();
+      currentStatus = 'done';
+      showNewsletterCard();
+      loadHistory();
     }
 
     if (data.type === 'error') {
       es.close(); es = null;
       setUIRunning(false);
       setStatusDot('error', 'Error');
+      currentStatus = 'error';
       showError(data.text);
     }
   };
 
   es.onerror = () => {
-    // auto-reconnect handled by EventSource; only close if pipeline is done
     setTimeout(async () => {
       const res = await fetch('/api/status');
-      const d = await res.json();
+      const d   = await res.json();
       if (d.status !== 'running') {
         if (es) { es.close(); es = null; }
         setUIRunning(false);
+        currentStatus = d.status;
       }
     }, 2000);
   };
@@ -588,7 +693,7 @@ function startStreaming() {
 
 // ── Log helpers ───────────────────────────────────────────────────────────
 function appendLog(data) {
-  const box = document.getElementById('log-box');
+  const box   = document.getElementById('log-box');
   const empty = document.getElementById('log-empty');
   if (empty) empty.remove();
 
@@ -596,13 +701,12 @@ function appendLog(data) {
   line.className = 'log-line';
 
   const ts = document.createElement('span');
-  ts.className = 'log-ts';
+  ts.className  = 'log-ts';
   ts.textContent = data.timestamp || '';
 
-  const txt = document.createElement('span');
+  const txt  = document.createElement('span');
   const text = data.text || '';
 
-  // Classify the text
   let cls = 'log-text';
   if (text.startsWith('   └─') || text.startsWith('  └─')) cls += ' indent';
   if (text.startsWith('✅'))  cls += ' ok';
@@ -610,26 +714,24 @@ function appendLog(data) {
   if (text.startsWith('⚠️')) cls += ' warn';
   if (data.type === 'step_start') cls += ' step';
 
-  txt.className = cls;
+  txt.className  = cls;
   txt.textContent = text;
 
   line.appendChild(ts);
   line.appendChild(txt);
   box.appendChild(line);
-
-  // Auto-scroll
   box.scrollTop = box.scrollHeight;
 }
 
 function clearLog() {
-  const box = document.getElementById('log-box');
-  box.innerHTML = '<div class="log-empty" id="log-empty">Waiting for pipeline to start...</div>';
+  document.getElementById('log-box').innerHTML =
+    '<div class="log-empty" id="log-empty">Waiting for pipeline to start...</div>';
 }
 
 // ── Progress ──────────────────────────────────────────────────────────────
 function setProgress(pct, label) {
   document.getElementById('progress-fill').style.width = pct + '%';
-  document.getElementById('progress-pct').textContent = pct + '%';
+  document.getElementById('progress-pct').textContent  = pct + '%';
   if (label) document.getElementById('progress-label').textContent = label;
 }
 
@@ -656,36 +758,33 @@ function resetSteps() {
 
 // ── Status dot ────────────────────────────────────────────────────────────
 function setStatusDot(state, label) {
-  const dot = document.getElementById('status-dot');
-  dot.className = 'status-dot ' + state;
+  document.getElementById('status-dot').className = 'status-dot ' + state;
   document.getElementById('status-label').textContent = label;
 }
 
 // ── UI states ─────────────────────────────────────────────────────────────
 function setUIRunning(running) {
-  document.getElementById('run-btn').disabled = running;
+  document.getElementById('run-btn').disabled    = running;
   document.getElementById('run-btn').textContent = running ? '⏳ Running...' : '▶ Run Pipeline';
-  const cancelWrap = document.getElementById('cancel-wrap');
-  cancelWrap.style.display = running ? 'inline-flex' : 'none';
+  document.getElementById('cancel-wrap').style.display = running ? 'inline-flex' : 'none';
 }
 
 // ── Newsletter card ───────────────────────────────────────────────────────
-async function showNewsletterActions(path) {
-  // Fetch latest filename from API if not passed
-  if (!path) {
+async function showNewsletterCard(name) {
+  if (!name) {
     try {
       const res = await fetch('/api/status');
-      const d = await res.json();
-      path = d.newsletter_path;
+      const d   = await res.json();
+      name = d.newsletter_name;
     } catch(e) {}
   }
   const card = document.getElementById('newsletter-card');
   card.style.display = 'block';
-  if (path) {
-    const name = path.split('/').pop().split('\\').pop();
-    document.getElementById('newsletter-filename').textContent = name;
-  }
+  if (name) document.getElementById('newsletter-filename').textContent = name;
 }
+
+// Keep old name working (called from SSE done handler above via showNewsletterCard)
+function showNewsletterActions(name) { showNewsletterCard(name); }
 
 function hideNewsletterCard() {
   document.getElementById('newsletter-card').style.display = 'none';
@@ -701,13 +800,175 @@ function downloadNewsletter() {
 
 // ── Error ─────────────────────────────────────────────────────────────────
 function showError(msg) {
-  const banner = document.getElementById('error-banner');
   document.getElementById('error-text').textContent = msg || 'An error occurred.';
-  banner.classList.add('visible');
+  document.getElementById('error-banner').classList.add('visible');
 }
 
 function hideError() {
   document.getElementById('error-banner').classList.remove('visible');
+}
+
+// ── EDIT MODE ─────────────────────────────────────────────────────────────
+
+const EDITABLE_CLASSES = [
+  'ed-kicker', 'ed-p', 'lead-hl', 'feat-hl', 'signal-txt',
+  'brief-body', 'brief-sum', 'hook-txt', 'closing-txt',
+];
+
+function enterEditMode() {
+  if (currentStatus === 'running') {
+    showToast('⚠️ Cannot edit while pipeline is running', 'warning');
+    return;
+  }
+  document.getElementById('newsletter-actions').style.display = 'none';
+  document.getElementById('edit-container').style.display     = 'block';
+
+  const iframe  = document.getElementById('newsletter-iframe');
+  iframe.onload = () => injectEditMode(iframe);
+  iframe.src    = '/api/newsletter?' + Date.now();
+}
+
+function injectEditMode(iframe) {
+  const doc = iframe.contentDocument;
+  if (!doc) return;
+
+  const style = doc.createElement('style');
+  style.id    = 'nabdh-edit-style';
+  style.textContent = `
+    [contenteditable="true"] {
+      outline: 2px dashed rgba(10,0,254,.35) !important;
+      cursor: text !important;
+      border-radius: 2px;
+      transition: background .15s, outline .15s;
+    }
+    [contenteditable="true"]:hover {
+      outline: 2px dashed rgba(10,0,254,.75) !important;
+      background: rgba(10,0,254,.04) !important;
+    }
+    [contenteditable="true"]:focus {
+      outline: 2px solid #0A00FE !important;
+      background: rgba(10,0,254,.06) !important;
+    }
+  `;
+  doc.head.appendChild(style);
+
+  let count = 0;
+  EDITABLE_CLASSES.forEach(cls => {
+    doc.querySelectorAll('.' + cls).forEach(el => {
+      el.contentEditable = 'true';
+      el.spellcheck      = true;
+      el.addEventListener('keydown', e => {
+        if (e.key === 'Enter')  e.preventDefault();
+        if (e.key === 'Escape') cancelEdits();
+      });
+      el.addEventListener('paste', e => {
+        e.preventDefault();
+        const text = e.clipboardData.getData('text/plain');
+        document.execCommand('insertText', false, text);
+      });
+      count++;
+    });
+  });
+  showToast(`✏️ ${count} text regions are now editable`);
+}
+
+async function saveEdits() {
+  const btn    = document.getElementById('save-btn');
+  const iframe = document.getElementById('newsletter-iframe');
+  const doc    = iframe.contentDocument;
+
+  btn.textContent = '⏳ Saving...';
+  btn.disabled    = true;
+
+  try {
+    const editStyle = doc.getElementById('nabdh-edit-style');
+    if (editStyle) editStyle.remove();
+    doc.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'));
+
+    const html = '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+
+    const resp   = await fetch('/api/newsletter/save', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ html }),
+    });
+    const result = await resp.json();
+
+    if (result.ok) {
+      showToast('✅ Saved — backup: ' + result.backup);
+      exitEditMode();
+      // Refresh the filename shown
+      document.getElementById('newsletter-filename').textContent = result.saved;
+    } else {
+      showToast('❌ ' + result.error, 'error');
+      injectEditMode(iframe);
+    }
+  } catch (err) {
+    showToast('❌ Save failed: ' + err.message, 'error');
+    injectEditMode(iframe);
+  } finally {
+    btn.textContent = '💾 Save Changes';
+    btn.disabled    = false;
+  }
+}
+
+function cancelEdits() {
+  if (!confirm('Discard all edits and return?')) return;
+  exitEditMode();
+}
+
+function exitEditMode(silent) {
+  const container = document.getElementById('edit-container');
+  const actions   = document.getElementById('newsletter-actions');
+  if (!container) return;
+  container.style.display = 'none';
+  if (actions) actions.style.display = 'flex';
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────
+function showToast(message, type = 'success') {
+  const colours = { success: '#271F5C', error: '#C0392B', warning: '#F39C12' };
+  const t = document.createElement('div');
+  t.style.cssText = `
+    position:fixed;bottom:24px;right:24px;z-index:99999;
+    background:${colours[type] || colours.success};
+    color:white;padding:12px 20px;border-radius:4px;
+    font-family:'JetBrains Mono',monospace;font-size:12px;
+    box-shadow:0 4px 20px rgba(0,0,0,.25);
+    max-width:400px;word-break:break-word;
+  `;
+  t.textContent = message;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 4000);
+}
+
+// ── History ───────────────────────────────────────────────────────────────
+async function loadHistory() {
+  try {
+    const res  = await fetch('/api/history');
+    const data = await res.json();
+    const rows = data.newsletters || [];
+
+    if (rows.length === 0) return;
+
+    document.getElementById('history-card').style.display = 'block';
+    const tbody = document.getElementById('history-body');
+    tbody.innerHTML = '';
+
+    rows.forEach(row => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${row.date}</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#888;">${row.name}</td>
+        <td style="color:#aaa;">${row.size_kb} KB</td>
+        <td><div class="hist-actions">
+          <a class="hist-btn" href="/api/newsletter?file=${encodeURIComponent(row.name)}" target="_blank">Open</a>
+          <a class="hist-btn" href="/api/newsletter?file=${encodeURIComponent(row.name)}&download=true">Download</a>
+        </div></td>
+      `;
+      tbody.appendChild(tr);
+    });
+  } catch(e) {}
 }
 </script>
 </body>
