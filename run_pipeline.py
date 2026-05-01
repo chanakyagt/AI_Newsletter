@@ -424,15 +424,18 @@ def run_preflight(logger: PipelineLogger) -> bool:
     logger.write("  ─────────────────")
     all_ok = True
 
-    # .env file
-    if ENV_FILE.exists():
+    # .env file — skipped on Railway (env vars injected by platform)
+    on_railway = bool(os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY"))
+    if on_railway:
+        logger.write("  [✓] Railway environment — using platform-injected env vars")
+    elif ENV_FILE.exists():
         logger.write("  [✓] .env file found")
     else:
         logger.write(f"  [✗] .env file NOT found at: {ENV_FILE}")
         logger.write("      Create a .env file in the same folder as run_pipeline.py")
         all_ok = False
 
-    # Load env
+    # Load env (no-op if file missing)
     load_dotenv(ENV_FILE, override=True)
 
     # API keys
@@ -810,16 +813,26 @@ def _make_op_logger() -> tuple:
 
 
 def _find_current_newsletter_html() -> Path | None:
-    """Most recent non-backup newsletter HTML."""
-    folder = PIPELINE_DIR / "news_output" / "newsletter"
-    if not folder.exists():
-        return None
-    files = sorted(
-        [p for p in folder.glob("nabdh_*.html") if "_backup_" not in p.name],
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    return files[0] if files else None
+    """Most recent non-backup newsletter HTML, searching dated dirs then legacy flat dir."""
+    news_output = PIPELINE_DIR / "news_output"
+    candidates = []
+    # Dated dirs: news_output/YYYY-MM-DD/newsletter/
+    try:
+        for d in sorted(news_output.iterdir(), reverse=True):
+            if d.is_dir() and len(d.name) == 10 and d.name[4] == "-":
+                nl_dir = d / "newsletter"
+                if nl_dir.exists():
+                    candidates.extend(
+                        p for p in nl_dir.glob("nabdh_*.html") if "_backup_" not in p.name
+                    )
+    except Exception:
+        pass
+    # Legacy flat dir
+    flat = news_output / "newsletter"
+    if flat.exists():
+        candidates.extend(p for p in flat.glob("nabdh_*.html") if "_backup_" not in p.name)
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else None
 
 
 def _backup_html(html_path: Path) -> Path:
@@ -879,7 +892,12 @@ def _run_redo_newsletter_impl():
     logger.write("")
 
     # Validate keypoints exist and are non-empty
-    keypoints_path = PIPELINE_DIR / "news_output" / "keypoints" / "keypoints.json"
+    _news_date = os.environ.get("NEWS_DATE", datetime.now().strftime("%Y-%m-%d"))
+    keypoints_path = PIPELINE_DIR / "news_output" / _news_date / "keypoints" / "keypoints.json"
+    if not keypoints_path.exists():
+        flat_kp = PIPELINE_DIR / "news_output" / "keypoints" / "keypoints.json"
+        if flat_kp.exists():
+            keypoints_path = flat_kp
     if not keypoints_path.exists():
         logger.write("  [ERROR] No keypoints file found.")
         logger.write("          Run the full pipeline first: python run_pipeline.py")
@@ -981,7 +999,12 @@ def _run_redo_editorial_impl():
     load_dotenv(ENV_FILE, override=True)
 
     # Validate both inputs exist before printing the header
-    keypoints_path = PIPELINE_DIR / "news_output" / "keypoints" / "keypoints.json"
+    _ed_date = os.environ.get("NEWS_DATE", datetime.now().strftime("%Y-%m-%d"))
+    keypoints_path = PIPELINE_DIR / "news_output" / _ed_date / "keypoints" / "keypoints.json"
+    if not keypoints_path.exists():
+        flat_kp = PIPELINE_DIR / "news_output" / "keypoints" / "keypoints.json"
+        if flat_kp.exists():
+            keypoints_path = flat_kp
     newsletter_file = _find_current_newsletter_html()
 
     if not keypoints_path.exists():
@@ -1043,10 +1066,10 @@ def _run_redo_editorial_impl():
         logger.write("         Proceeding, but consider --redo-newsletter for a clean start.")
 
     # Validate DeepSeek key
-    api_key = os.environ.get("Deepseek_API_Key_1", "")
+    api_key = os.environ.get("DeepSeek_API_Key_1") or os.environ.get("Deepseek_API_Key_1", "")
     if not api_key:
-        logger.write("  [ERROR] Deepseek_API_Key_1 is not set in .env")
-        logger.write("          Add it to your .env file and try again.")
+        logger.write("  [ERROR] DeepSeek_API_Key_1 is not set")
+        logger.write("          Add it to your .env file or Railway environment variables.")
         logger.close()
         sys.exit(1)
 

@@ -48,9 +48,10 @@ import requests
 # SECTION 1 — CONFIGURATION
 # ═════════════════════════════════════════════════════════════════════════════
 
+NEWS_DATE = os.environ.get("NEWS_DATE", datetime.now().strftime("%Y-%m-%d"))
 INPUT_DIRS = [
-    os.path.join("news_output", "english"),
-    os.path.join("news_output", "arabic_translated"),
+    os.path.join("news_output", NEWS_DATE, "english"),
+    os.path.join("news_output", NEWS_DATE, "arabic_translated"),
 ]
 OUTPUT_DIR      = "url_resolution"
 CHECKPOINT_FILE = os.path.join(OUTPUT_DIR, "checkpoint.json")

@@ -723,15 +723,31 @@ async def save_newsletter_edits(request: Request):
 
 @app.get("/api/history")
 async def get_history():
-    newsletter_dir = ROOT / "news_output" / "newsletter"
-    if not newsletter_dir.exists():
-        return {"newsletters": []}
+    news_output = ROOT / "news_output"
+    all_files = []
 
-    files = sorted(
-        [f for f in newsletter_dir.glob("nabdh_????-??-??.html")],
-        key=lambda f: f.stat().st_mtime,
-        reverse=True,
-    )[:10]
+    # Search dated dirs (news_output/YYYY-MM-DD/newsletter/)
+    try:
+        for d in news_output.iterdir():
+            if d.is_dir() and len(d.name) == 10 and d.name[4] == "-":
+                nl_dir = d / "newsletter"
+                if nl_dir.exists():
+                    all_files.extend(
+                        f for f in nl_dir.glob("nabdh_????-??-??.html")
+                        if "_edit_" not in f.name
+                    )
+    except Exception:
+        pass
+
+    # Legacy flat dir fallback (local dev)
+    legacy = news_output / "newsletter"
+    if legacy.exists():
+        all_files.extend(
+            f for f in legacy.glob("nabdh_????-??-??.html")
+            if "_edit_" not in f.name
+        )
+
+    files = sorted(all_files, key=lambda f: f.stat().st_mtime, reverse=True)[:10]
 
     return {"newsletters": [
         {

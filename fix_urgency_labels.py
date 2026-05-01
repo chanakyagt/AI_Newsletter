@@ -16,12 +16,14 @@ New deterministic rules (content + recency, no strict age cutoff):
 """
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from collections import Counter
 
-KEYPOINTS_FILE = Path("news_output/keypoints/keypoints.json")
-SUMMARY_FILE   = Path("news_output/keypoints/keypoints_summary.json")
+NEWS_DATE      = os.environ.get("NEWS_DATE", datetime.now().strftime("%Y-%m-%d"))
+KEYPOINTS_FILE = Path(f"news_output/{NEWS_DATE}/keypoints/keypoints.json")
+SUMMARY_FILE   = Path(f"news_output/{NEWS_DATE}/keypoints/keypoints_summary.json")
 RUN_DATE       = datetime(2026, 4, 29, tzinfo=timezone.utc)
 
 IMMEDIATE_SCORE_MIN = 75
