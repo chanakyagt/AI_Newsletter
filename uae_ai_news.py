@@ -36,7 +36,8 @@ sys.stdout.reconfigure(encoding='utf-8')
 # SECTION 1 — CONFIG
 # ═════════════════════════════════════════════════════════════════════════════
 
-OUTPUT_DIR              = "news_output"
+NEWS_DATE               = os.environ.get("NEWS_DATE", datetime.now().strftime("%Y-%m-%d"))
+OUTPUT_DIR              = os.path.join("news_output", NEWS_DATE)
 REQUEST_DELAY_SECONDS   = 1.2
 REQUEST_TIMEOUT_SECONDS = 15
 MAX_SUMMARY_CHARS       = 600

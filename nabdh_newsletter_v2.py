@@ -20,9 +20,10 @@ load_dotenv()
 # CONFIG
 # ═══════════════════════════════════════════════════════════
 
-INPUT_FILE   = Path("news_output/keypoints/keypoints.json")
+NEWS_DATE    = os.environ.get("NEWS_DATE", datetime.now().strftime("%Y-%m-%d"))
+INPUT_FILE   = Path(f"news_output/{NEWS_DATE}/keypoints/keypoints.json")
 TRACKER_FILE = Path("quarterly_tracker.json")
-OUTPUT_DIR   = Path("news_output/newsletter")
+OUTPUT_DIR   = Path(f"news_output/{NEWS_DATE}/newsletter")
 
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("Deepseek_API_Key_1", "")
 MODEL    = "deepseek-v4-pro"   # DeepSeek V4 Pro — confirmed API string
@@ -94,7 +95,7 @@ def load_logo() -> str:
     print("  [LOGO] WARNING: No logo file found. Place waves-logo.svg in same directory.")
     return ""
 
-_EDITION_COUNTER = OUTPUT_DIR / "edition_counter.json"
+_EDITION_COUNTER = Path("news_output/newsletter/edition_counter.json")
 
 def get_edition_number() -> int:
     override = os.environ.get("NABDH_EDITION_OVERRIDE", "").strip()
@@ -1009,7 +1010,8 @@ def main():
     if "ISSUE #" in html:                          issues.append("CRITICAL: 'ISSUE #' in output")
     if "CONFIDENTIAL" in html:                     issues.append("CRITICAL: CONFIDENTIAL in output")
     if "Turnkey" in html:                          issues.append("CRITICAL: Vendor tagline in output")
-    if html.count('href="#"') > 3:                 issues.append(f"WARN: {html.count('href=\"#\"')} empty links")
+    _empty_links = html.count('href="#"')
+    if _empty_links > 3:                             issues.append(f"WARN: {_empty_links} empty links")
 
     if issues:
         print("\n  Quality check:")

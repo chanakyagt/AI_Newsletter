@@ -26,11 +26,12 @@ sys.stdout.reconfigure(encoding='utf-8')
 load_dotenv()
 
 # ──────────────────────────────── CONFIG ──────────────────────────────────────
+NEWS_DATE    = os.environ.get("NEWS_DATE", datetime.now().strftime("%Y-%m-%d"))
 INPUT_DIRS = [
-    Path("news_output/english"),
-    Path("news_output/arabic_translated"),
+    Path(f"news_output/{NEWS_DATE}/english"),
+    Path(f"news_output/{NEWS_DATE}/arabic_translated"),
 ]
-OUTPUT_DIR           = Path("news_output/deduped")
+OUTPUT_DIR           = Path(f"news_output/{NEWS_DATE}/deduped")
 SIMILARITY_THRESHOLD = 0.88
 EMBEDDING_MODEL      = "text-embedding-3-small"
 EMBEDDING_BATCH_SIZE = 500

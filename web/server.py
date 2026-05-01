@@ -95,17 +95,57 @@ async def _safe_put(event: dict) -> None:
             pass
 
 
+def _today() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _step_done(step_num: int, date: str) -> bool:
+    d = ROOT / "news_output" / date
+    checks = {
+        1: lambda: any((d / "english").glob("*.json")),
+        2: lambda: any((d / "arabic_translated").glob("*.json")),
+        3: lambda: (d / "deduped" / "distinct_articles.json").exists(),
+        4: lambda: (d / "scored" / "newsletter_candidates.json").exists(),
+        5: lambda: (d / "firecrawled" / "firecrawled_articles.json").exists(),
+        6: lambda: (d / "keypoints" / "keypoints.json").exists(),
+        7: lambda: any((d / "newsletter").glob("nabdh_*.html")),
+    }
+    try:
+        return checks.get(step_num, lambda: False)()
+    except Exception:
+        return False
+
+
 def _find_newsletter(file: str = None) -> str | None:
-    newsletter_dir = ROOT / "news_output" / "newsletter"
-    if file:
-        p = newsletter_dir / file
-        return str(p) if p.exists() else None
-    candidates = sorted(
-        newsletter_dir.glob("nabdh_*.html"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    return str(candidates[0]) if candidates else None
+    news_output = ROOT / "news_output"
+    # Collect candidate newsletter dirs: dated dirs newest-first, then legacy flat dir
+    dirs_to_search = []
+    try:
+        for d in sorted(news_output.iterdir(), reverse=True):
+            if d.is_dir() and len(d.name) == 10 and d.name[4] == "-":
+                nl = d / "newsletter"
+                if nl.exists():
+                    dirs_to_search.append(nl)
+    except Exception:
+        pass
+    legacy = news_output / "newsletter"
+    if legacy.exists():
+        dirs_to_search.append(legacy)
+
+    for newsletter_dir in dirs_to_search:
+        if file:
+            p = newsletter_dir / file
+            if p.exists():
+                return str(p)
+        else:
+            candidates = sorted(
+                newsletter_dir.glob("nabdh_*.html"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if candidates:
+                return str(candidates[0])
+    return None
 
 
 def _refresh_newsletter_path() -> None:
@@ -135,26 +175,20 @@ def _release_lock() -> None:
 
 # ── Fresh run cleanup ─────────────────────────────────────────────────────────
 
-def _clean_for_fresh_run() -> None:
-    dirs_to_delete = [
-        ROOT / "news_output" / "english",
-        ROOT / "news_output" / "arabic",
-        ROOT / "news_output" / "arabic_translated",
-        ROOT / "news_output" / "combined",
-        ROOT / "news_output" / "deduped",
-        ROOT / "news_output" / "scored",
-        ROOT / "news_output" / "firecrawled",
-        ROOT / "news_output" / "keypoints",
-    ]
+def _clean_for_fresh_run(today: str) -> None:
+    date_dir = ROOT / "news_output" / today
+    subdirs = ["english", "arabic", "arabic_translated", "combined",
+               "deduped", "scored", "firecrawled", "keypoints", "newsletter"]
     deleted = []
-    for d in dirs_to_delete:
+    for sub in subdirs:
+        d = date_dir / sub
         if d.exists():
             shutil.rmtree(d)
-            deleted.append(d.name)
+            deleted.append(sub)
 
     if deleted:
         _push({"type": "log",
-               "text": f"🧹 Cleared previous run data: {', '.join(deleted)}",
+               "text": f"🧹 Cleared today's data: {', '.join(deleted)}",
                "step": 0, "progress": 0, "timestamp": _ts()})
     _push({"type": "log",
            "text": "✅ Fresh start — all steps will run on today's news",
@@ -277,12 +311,13 @@ def _humanise(line: str, step: int) -> str | None:
 
 # ── Subprocess runner ─────────────────────────────────────────────────────────
 
-def _run_script_streaming(script_name: str, step_num: int, step_label: str) -> int:
+def _run_script_streaming(script_name: str, step_num: int, step_label: str, news_date: str) -> int:
     global active_process
     env = {
         **os.environ,
         "PYTHONIOENCODING": "utf-8",
         "PYTHONUTF8": "1",
+        "NEWS_DATE": news_date,
     }
     active_process = subprocess.Popen(
         [sys.executable, script_name],
@@ -313,12 +348,30 @@ def _run_script_streaming(script_name: str, step_num: int, step_label: str) -> i
 
 # ── Pipeline runners ──────────────────────────────────────────────────────────
 
-def _run_full_pipeline() -> None:
+def _run_full_pipeline(force_fresh: bool = False) -> None:
     global pipeline_state
     try:
-        _clean_for_fresh_run()
+        today = _today()
+        if force_fresh:
+            _clean_for_fresh_run(today)
+        else:
+            _push({"type": "log",
+                   "text": f"📅 Date: {today} — resuming from last completed step",
+                   "step": 0, "progress": 0, "timestamp": _ts()})
 
         for step_num, script, label in STEPS:
+            # Resume: skip steps that already have output for today
+            if not force_fresh and _step_done(step_num, today):
+                _push({
+                    "type": "step_done",
+                    "text": f"⏭ {label} — already done today, skipping",
+                    "step": step_num,
+                    "progress": STEP_PROGRESS[step_num] + 5,
+                    "timestamp": _ts(),
+                })
+                pipeline_state["progress"] = STEP_PROGRESS[step_num] + 5
+                continue
+
             pipeline_state["current_step"] = label
             pipeline_state["progress"] = STEP_PROGRESS[step_num]
             _push({
@@ -329,7 +382,7 @@ def _run_full_pipeline() -> None:
                 "timestamp": _ts(),
             })
 
-            rc = _run_script_streaming(script, step_num, label)
+            rc = _run_script_streaming(script, step_num, label, today)
 
             if rc != 0:
                 pipeline_state["status"] = "error"
@@ -381,7 +434,7 @@ def _run_newsletter_only() -> None:
             "timestamp": _ts(),
         })
 
-        rc = _run_script_streaming(script, step_num, label)
+        rc = _run_script_streaming(script, step_num, label, _today())
 
         if rc != 0:
             pipeline_state["status"] = "error"
@@ -424,7 +477,7 @@ def _run_editorial_only() -> None:
             "timestamp": _ts(),
         })
 
-        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", "NEWS_DATE": _today()}
         active_process = subprocess.Popen(
             [sys.executable, "run_pipeline.py", "--redo-editorial"],
             stdout=subprocess.PIPE,
@@ -491,6 +544,7 @@ async def debug_env():
     """Check which pipeline env vars are present (values hidden). Safe to expose publicly."""
     keys_to_check = [
         "DeepSeek_API_Key_1", "DeepSeek_API_Key_2", "DeepSeek_API_Key_3",
+        "Deepseek_API_Key_1", "Deepseek_API_Key_2", "Deepseek_API_Key_3",
         "OPENAI_API_KEY_1", "OPENAI_API_KEY_2", "OPENAI_API_KEY_3",
         "FIRECRAWL_API_KEY",
     ]
@@ -522,21 +576,21 @@ def _start_thread(target) -> None:
 
 
 @app.post("/api/run")
-async def run_pipeline():
+async def run_pipeline(force: bool = False):
     if pipeline_state["status"] == "running":
         return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
     if not _acquire_lock():
         return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
     pipeline_state.update({
         "status": "running",
-        "mode": "full",
+        "mode": "full" if not force else "full-fresh",
         "progress": 0,
         "started_at": datetime.now().isoformat(),
         "finished_at": None,
         "error": None,
         "current_step": None,
     })
-    _start_thread(_run_full_pipeline)
+    _start_thread(lambda: _run_full_pipeline(force_fresh=force))
     return {"ok": True}
 
 

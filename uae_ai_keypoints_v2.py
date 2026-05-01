@@ -31,8 +31,9 @@ sys.stdout.reconfigure(encoding='utf-8')
 load_dotenv()
 
 # ──────────────────────────────── CONFIG ──────────────────────────────────────
-INPUT_FILE  = Path("news_output/firecrawled/firecrawled_articles.json")
-OUTPUT_DIR  = Path("news_output/keypoints")
+NEWS_DATE   = os.environ.get("NEWS_DATE", datetime.now().strftime("%Y-%m-%d"))
+INPUT_FILE  = Path(f"news_output/{NEWS_DATE}/firecrawled/firecrawled_articles.json")
+OUTPUT_DIR  = Path(f"news_output/{NEWS_DATE}/keypoints")
 OUTPUT_FILE = OUTPUT_DIR / "keypoints.json"
 
 DEEPSEEK_API_KEY_1 = os.environ.get("Deepseek_API_Key_1")

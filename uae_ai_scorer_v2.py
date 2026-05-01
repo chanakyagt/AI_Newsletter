@@ -27,8 +27,9 @@ sys.stdout.reconfigure(encoding='utf-8')
 load_dotenv()
 
 # ──────────────────────────────── CONFIG ──────────────────────────────────────
-INPUT_FILE   = Path("news_output/deduped/distinct_articles.json")
-OUTPUT_DIR   = Path("news_output/scored")
+NEWS_DATE    = os.environ.get("NEWS_DATE", datetime.now().strftime("%Y-%m-%d"))
+INPUT_FILE   = Path(f"news_output/{NEWS_DATE}/deduped/distinct_articles.json")
+OUTPUT_DIR   = Path(f"news_output/{NEWS_DATE}/scored")
 
 DEEPSEEK_API_KEY_1 = os.environ.get("Deepseek_API_Key_1")
 DEEPSEEK_API_KEY_2 = os.environ.get("Deepseek_API_Key_2")

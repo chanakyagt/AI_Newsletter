@@ -33,8 +33,9 @@ sys.stdout.reconfigure(encoding='utf-8')
 load_dotenv()
 
 # ──────────────────────────────── CONFIG ──────────────────────────────────────
-INPUT_FILE  = Path("news_output/scored/newsletter_candidates.json")
-OUTPUT_DIR  = Path("news_output/firecrawled")
+NEWS_DATE   = os.environ.get("NEWS_DATE", datetime.now().strftime("%Y-%m-%d"))
+INPUT_FILE  = Path(f"news_output/{NEWS_DATE}/scored/newsletter_candidates.json")
+OUTPUT_DIR  = Path(f"news_output/{NEWS_DATE}/firecrawled")
 
 FIRECRAWL_API_KEY = os.environ.get("FIRECRAWL_API_KEY")
 FIRECRAWL_URL     = "https://api.firecrawl.dev/v1/scrape"
