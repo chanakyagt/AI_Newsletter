@@ -486,6 +486,20 @@ async def index():
     return FileResponse(Path(__file__).parent / "ui.html")
 
 
+@app.get("/api/debug/env")
+async def debug_env():
+    """Check which pipeline env vars are present (values hidden). Safe to expose publicly."""
+    keys_to_check = [
+        "DeepSeek_API_Key_1", "DeepSeek_API_Key_2", "DeepSeek_API_Key_3",
+        "OPENAI_API_KEY_1", "OPENAI_API_KEY_2", "OPENAI_API_KEY_3",
+        "FIRECRAWL_API_KEY",
+    ]
+    return {
+        k: ("SET (len={})".format(len(os.environ[k])) if k in os.environ and os.environ[k] else "MISSING")
+        for k in keys_to_check
+    }
+
+
 @app.get("/api/status")
 async def get_status():
     newsletter = _find_newsletter()
