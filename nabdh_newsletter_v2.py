@@ -112,6 +112,7 @@ def get_edition_number() -> int:
 
 def _increment_edition_number():
     current = get_edition_number()
+    _EDITION_COUNTER.parent.mkdir(parents=True, exist_ok=True)
     _EDITION_COUNTER.write_text(
         json.dumps({"next_edition": current + 1}, indent=2),
         encoding="utf-8"
