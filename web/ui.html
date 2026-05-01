@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NABDH — Pipeline</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --blue:  #0A00FE;
+    --cyan:  #00FFFF;
+    --navy:  #271F5C;
+    --dark:  #1A1828;
+    --bg:    #F0F0F8;
+    --white: #ffffff;
+    --green: #00C851;
+    --red:   #C0392B;
+    --amber: #F39C12;
+    --step-done:    #00C851;
+    --step-active:  #0A00FE;
+    --step-idle:    #ccc;
+    --radius: 10px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--dark);
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  header {
+    background: var(--dark);
+    color: var(--white);
+    padding: 18px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 2px solid var(--blue);
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+  }
+
+  .brand-arabic {
+    font-family: 'Playfair Display', serif;
+    font-size: 26px;
+    color: var(--cyan);
+    letter-spacing: 2px;
+  }
+
+  .brand-en {
+    font-size: 13px;
+    color: #aaa;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+  }
+
+  /* ── Buttons ── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 22px;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .15s, transform .1s;
+  }
+  .btn:hover:not(:disabled) { opacity: .85; transform: translateY(-1px); }
+  .btn:active:not(:disabled) { transform: translateY(0); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+
+  .btn-primary  { background: var(--blue); color: var(--white); }
+  .btn-success  { background: var(--green); color: var(--dark); }
+  .btn-outline  { background: transparent; color: var(--white); border: 1.5px solid #555; }
+  .btn-danger   { background: var(--red); color: var(--white); }
+  .btn-sm       { padding: 7px 14px; font-size: 12px; }
+
+  /* ── Main layout ── */
+  main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 28px 24px 60px;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+
+  /* ── Card ── */
+  .card {
+    background: var(--white);
+    border-radius: var(--radius);
+    box-shadow: 0 2px 12px rgba(0,0,0,.07);
+    overflow: hidden;
+  }
+
+  .card-header {
+    padding: 14px 20px;
+    background: #f7f7fc;
+    border-bottom: 1px solid #e8e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .card-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #888;
+  }
+
+  .card-body { padding: 20px; }
+
+  /* ── Step indicators ── */
+  .steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 20px;
+  }
+
+  .step-pill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    border-radius: 999px;
+    border: 1.5px solid var(--step-idle);
+    font-size: 12px;
+    color: #aaa;
+    transition: all .3s;
+    white-space: nowrap;
+  }
+
+  .step-pill.active {
+    border-color: var(--step-active);
+    color: var(--step-active);
+    background: #f0f0ff;
+  }
+
+  .step-pill.done {
+    border-color: var(--step-done);
+    color: var(--step-done);
+    background: #f0fff5;
+  }
+
+  .step-pill.error {
+    border-color: var(--red);
+    color: var(--red);
+    background: #fff0f0;
+  }
+
+  .step-icon {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--step-idle);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    flex-shrink: 0;
+    transition: background .3s;
+  }
+
+  .step-pill.active .step-icon {
+    background: var(--step-active);
+    animation: spin 1s linear infinite;
+  }
+
+  .step-pill.done .step-icon   { background: var(--step-done); }
+  .step-pill.error .step-icon  { background: var(--red); }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+
+  /* ── Progress bar ── */
+  .progress-wrap {
+    padding: 0 20px 20px;
+  }
+
+  .progress-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 6px;
+  }
+
+  .progress-label {
+    font-size: 12px;
+    color: #888;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .progress-pct {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--blue);
+    min-width: 36px;
+    text-align: right;
+  }
+
+  .progress-bar-bg {
+    height: 8px;
+    background: #e8e8f0;
+    border-radius: 999px;
+    overflow: hidden;
+  }
+
+  .progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--blue), var(--cyan));
+    border-radius: 999px;
+    width: 0%;
+    transition: width .5s cubic-bezier(.4,0,.2,1);
+  }
+
+  /* ── Log box ── */
+  .log-box {
+    background: #0e0d1a;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    line-height: 1.7;
+    padding: 16px;
+    height: 360px;
+    overflow-y: auto;
+    border-radius: 0 0 var(--radius) var(--radius);
+  }
+
+  .log-empty {
+    color: #555;
+    font-style: italic;
+    padding: 8px 0;
+  }
+
+  .log-line {
+    display: flex;
+    gap: 12px;
+    padding: 1px 0;
+  }
+
+  .log-ts {
+    color: #444;
+    flex-shrink: 0;
+    user-select: none;
+  }
+
+  .log-text { color: #ccc; word-break: break-word; }
+  .log-text.indent { padding-left: 20px; color: #888; }
+  .log-text.ok     { color: var(--green); }
+  .log-text.err    { color: var(--red); }
+  .log-text.warn   { color: var(--amber); }
+  .log-text.step   { color: var(--cyan); font-weight: 500; }
+
+  /* ── Newsletter card ── */
+  #newsletter-card {
+    display: none;
+    animation: fadeIn .4s ease;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .newsletter-ready {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 20px;
+    flex-wrap: wrap;
+  }
+
+  .newsletter-icon { font-size: 36px; }
+
+  .newsletter-info { flex: 1; }
+  .newsletter-info h3 { font-size: 16px; margin-bottom: 4px; }
+  .newsletter-info p  { font-size: 13px; color: #888; }
+
+  .newsletter-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  /* ── Re-run options ── */
+  .rerun-row {
+    display: flex;
+    gap: 10px;
+    padding: 14px 20px;
+    border-top: 1px solid #f0f0f8;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .rerun-label {
+    font-size: 11px;
+    color: #aaa;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-right: 4px;
+  }
+
+  /* ── Error banner ── */
+  #error-banner {
+    display: none;
+    background: #fff0f0;
+    border: 1.5px solid var(--red);
+    border-radius: var(--radius);
+    padding: 14px 20px;
+    color: var(--red);
+    font-size: 14px;
+    align-items: center;
+    gap: 10px;
+  }
+
+  #error-banner.visible { display: flex; }
+
+  /* ── Status dot ── */
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ccc;
+    display: inline-block;
+  }
+  .status-dot.running { background: var(--blue); animation: pulse 1.2s ease-in-out infinite; }
+  .status-dot.done    { background: var(--green); }
+  .status-dot.error   { background: var(--red); }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: .3; }
+  }
+
+  /* ── Cancel button area ── */
+  #cancel-wrap { display: none; }
+  #cancel-wrap.visible { display: inline-flex; }
+</style>
+</head>
+
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────────────── -->
+<header>
+  <div class="brand">
+    <span class="brand-arabic">نبض</span>
+    <span class="brand-en">NABDH &nbsp;·&nbsp; UAE AI Intelligence</span>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;">
+    <span id="cancel-wrap" class="visible" style="display:none;">
+      <button class="btn btn-outline btn-sm" onclick="cancelPipeline()">⛔ Cancel</button>
+    </span>
+    <button id="run-btn" class="btn btn-primary" onclick="runPipeline('full')">
+      ▶ Run Pipeline
+    </button>
+  </div>
+</header>
+
+<!-- ── Main ───────────────────────────────────────────────────────────── -->
+<main>
+
+  <!-- Error banner -->
+  <div id="error-banner">
+    <span style="font-size:18px;">❌</span>
+    <span id="error-text">An error occurred.</span>
+    <button class="btn btn-danger btn-sm" style="margin-left:auto;" onclick="retryPipeline()">Retry</button>
+  </div>
+
+  <!-- Progress card -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Pipeline Progress</span>
+      <span>
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-label" style="font-size:12px;color:#888;margin-left:6px;">Idle</span>
+      </span>
+    </div>
+
+    <!-- Step pills -->
+    <div class="steps" id="steps-row">
+      <div class="step-pill" id="step-1" data-step="1">
+        <div class="step-icon">1</div> News Fetch
+      </div>
+      <div class="step-pill" id="step-2" data-step="2">
+        <div class="step-icon">2</div> Translation
+      </div>
+      <div class="step-pill" id="step-3" data-step="3">
+        <div class="step-icon">3</div> Deduplication
+      </div>
+      <div class="step-pill" id="step-4" data-step="4">
+        <div class="step-icon">4</div> Scoring
+      </div>
+      <div class="step-pill" id="step-5" data-step="5">
+        <div class="step-icon">5</div> Content Fetch
+      </div>
+      <div class="step-pill" id="step-6" data-step="6">
+        <div class="step-icon">6</div> Intelligence
+      </div>
+      <div class="step-pill" id="step-7" data-step="7">
+        <div class="step-icon">7</div> Newsletter
+      </div>
+    </div>
+
+    <!-- Progress bar -->
+    <div class="progress-wrap">
+      <div class="progress-row">
+        <span class="progress-label" id="progress-label">Ready to run</span>
+        <span class="progress-pct" id="progress-pct">0%</span>
+      </div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="progress-fill"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log card -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Live Log</span>
+      <button class="btn btn-outline btn-sm" onclick="clearLog()" style="font-size:11px;padding:4px 10px;color:#666;border-color:#ddd;">Clear</button>
+    </div>
+    <div class="log-box" id="log-box">
+      <div class="log-empty" id="log-empty">Waiting for pipeline to start...</div>
+    </div>
+  </div>
+
+  <!-- Newsletter card (shown when done) -->
+  <div class="card" id="newsletter-card">
+    <div class="newsletter-ready">
+      <div class="newsletter-icon">📰</div>
+      <div class="newsletter-info">
+        <h3>Your newsletter is ready</h3>
+        <p id="newsletter-filename">nabdh_*.html</p>
+      </div>
+      <div class="newsletter-actions">
+        <button class="btn btn-primary" onclick="openNewsletter()">🔗 Open in New Tab</button>
+        <button class="btn btn-success" onclick="downloadNewsletter()">⬇ Download HTML</button>
+      </div>
+    </div>
+    <div class="rerun-row">
+      <span class="rerun-label">Re-run:</span>
+      <button class="btn btn-outline btn-sm" style="color:var(--navy);border-color:var(--navy);" onclick="runPipeline('newsletter')">
+        ↺ Regenerate Newsletter
+      </button>
+      <button class="btn btn-outline btn-sm" style="color:var(--navy);border-color:var(--navy);" onclick="runPipeline('editorial')">
+        ↺ Regenerate Editorial Only
+      </button>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────
+let es = null;
+let currentStep = 0;
+let stepStates = {}; // stepNum -> 'idle' | 'active' | 'done' | 'error'
+
+// ── Init ─────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
+  const res = await fetch('/api/status');
+  const data = await res.json();
+  applyStatus(data);
+  if (data.status === 'running') {
+    setUIRunning(true);
+    startStreaming();
+  }
+  if (data.status === 'done') {
+    setUIRunning(false);
+    showNewsletterActions(data.newsletter_path);
+    setProgress(100, data.current_step || 'Complete');
+    setStatusDot('done', 'Done');
+  }
+  if (data.status === 'error') {
+    setStatusDot('error', 'Error');
+    showError(data.error || 'An error occurred.');
+  }
+});
+
+function applyStatus(data) {
+  if (data.progress !== null && data.progress !== undefined) {
+    setProgress(data.progress, data.current_step || '');
+  }
+}
+
+// ── Pipeline actions ──────────────────────────────────────────────────────
+async function runPipeline(mode = 'full') {
+  const endpoints = { full: '/api/run', newsletter: '/api/run/newsletter', editorial: '/api/run/editorial' };
+  hideError();
+  hideNewsletterCard();
+  resetSteps();
+  clearLog();
+  setProgress(0, 'Starting...');
+  setStatusDot('running', 'Running');
+  setUIRunning(true);
+
+  const res = await fetch(endpoints[mode], { method: 'POST' });
+  const data = await res.json();
+  if (data.error) {
+    showError(data.error);
+    setUIRunning(false);
+    setStatusDot('error', 'Error');
+    return;
+  }
+  startStreaming();
+}
+
+async function cancelPipeline() {
+  await fetch('/api/cancel', { method: 'POST' });
+  setUIRunning(false);
+  setStatusDot('idle', 'Idle');
+}
+
+function retryPipeline() {
+  hideError();
+  runPipeline('full');
+}
+
+// ── SSE streaming ─────────────────────────────────────────────────────────
+function startStreaming() {
+  if (es) { es.close(); es = null; }
+  es = new EventSource('/api/stream');
+
+  es.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.type === 'ping') return;
+
+    appendLog(data);
+
+    if (data.progress !== null && data.progress !== undefined) {
+      setProgress(data.progress, data.text || '');
+    }
+
+    if (data.step) {
+      if (data.type === 'step_start') markStep(data.step, 'active');
+      if (data.type === 'step_done')  markStep(data.step, 'done');
+      if (data.type === 'error')      markStep(data.step, 'error');
+    }
+
+    if (data.type === 'done') {
+      es.close(); es = null;
+      setUIRunning(false);
+      setStatusDot('done', 'Done');
+      setProgress(100, '🎉 Newsletter ready');
+      showNewsletterActions();
+    }
+
+    if (data.type === 'error') {
+      es.close(); es = null;
+      setUIRunning(false);
+      setStatusDot('error', 'Error');
+      showError(data.text);
+    }
+  };
+
+  es.onerror = () => {
+    // auto-reconnect handled by EventSource; only close if pipeline is done
+    setTimeout(async () => {
+      const res = await fetch('/api/status');
+      const d = await res.json();
+      if (d.status !== 'running') {
+        if (es) { es.close(); es = null; }
+        setUIRunning(false);
+      }
+    }, 2000);
+  };
+}
+
+// ── Log helpers ───────────────────────────────────────────────────────────
+function appendLog(data) {
+  const box = document.getElementById('log-box');
+  const empty = document.getElementById('log-empty');
+  if (empty) empty.remove();
+
+  const line = document.createElement('div');
+  line.className = 'log-line';
+
+  const ts = document.createElement('span');
+  ts.className = 'log-ts';
+  ts.textContent = data.timestamp || '';
+
+  const txt = document.createElement('span');
+  const text = data.text || '';
+
+  // Classify the text
+  let cls = 'log-text';
+  if (text.startsWith('   └─') || text.startsWith('  └─')) cls += ' indent';
+  if (text.startsWith('✅'))  cls += ' ok';
+  if (text.startsWith('❌'))  cls += ' err';
+  if (text.startsWith('⚠️')) cls += ' warn';
+  if (data.type === 'step_start') cls += ' step';
+
+  txt.className = cls;
+  txt.textContent = text;
+
+  line.appendChild(ts);
+  line.appendChild(txt);
+  box.appendChild(line);
+
+  // Auto-scroll
+  box.scrollTop = box.scrollHeight;
+}
+
+function clearLog() {
+  const box = document.getElementById('log-box');
+  box.innerHTML = '<div class="log-empty" id="log-empty">Waiting for pipeline to start...</div>';
+}
+
+// ── Progress ──────────────────────────────────────────────────────────────
+function setProgress(pct, label) {
+  document.getElementById('progress-fill').style.width = pct + '%';
+  document.getElementById('progress-pct').textContent = pct + '%';
+  if (label) document.getElementById('progress-label').textContent = label;
+}
+
+// ── Step pills ────────────────────────────────────────────────────────────
+function markStep(stepNum, state) {
+  const pill = document.getElementById('step-' + stepNum);
+  if (!pill) return;
+  pill.className = 'step-pill ' + state;
+  const icon = pill.querySelector('.step-icon');
+  if (state === 'done')   icon.textContent = '✓';
+  if (state === 'error')  icon.textContent = '✗';
+  if (state === 'active') icon.textContent = stepNum;
+}
+
+function resetSteps() {
+  for (let i = 1; i <= 7; i++) {
+    const pill = document.getElementById('step-' + i);
+    if (pill) {
+      pill.className = 'step-pill';
+      pill.querySelector('.step-icon').textContent = i;
+    }
+  }
+}
+
+// ── Status dot ────────────────────────────────────────────────────────────
+function setStatusDot(state, label) {
+  const dot = document.getElementById('status-dot');
+  dot.className = 'status-dot ' + state;
+  document.getElementById('status-label').textContent = label;
+}
+
+// ── UI states ─────────────────────────────────────────────────────────────
+function setUIRunning(running) {
+  document.getElementById('run-btn').disabled = running;
+  document.getElementById('run-btn').textContent = running ? '⏳ Running...' : '▶ Run Pipeline';
+  const cancelWrap = document.getElementById('cancel-wrap');
+  cancelWrap.style.display = running ? 'inline-flex' : 'none';
+}
+
+// ── Newsletter card ───────────────────────────────────────────────────────
+async function showNewsletterActions(path) {
+  // Fetch latest filename from API if not passed
+  if (!path) {
+    try {
+      const res = await fetch('/api/status');
+      const d = await res.json();
+      path = d.newsletter_path;
+    } catch(e) {}
+  }
+  const card = document.getElementById('newsletter-card');
+  card.style.display = 'block';
+  if (path) {
+    const name = path.split('/').pop().split('\\').pop();
+    document.getElementById('newsletter-filename').textContent = name;
+  }
+}
+
+function hideNewsletterCard() {
+  document.getElementById('newsletter-card').style.display = 'none';
+}
+
+function openNewsletter() {
+  window.open('/api/newsletter', '_blank');
+}
+
+function downloadNewsletter() {
+  window.location.href = '/api/newsletter?download=true';
+}
+
+// ── Error ─────────────────────────────────────────────────────────────────
+function showError(msg) {
+  const banner = document.getElementById('error-banner');
+  document.getElementById('error-text').textContent = msg || 'An error occurred.';
+  banner.classList.add('visible');
+}
+
+function hideError() {
+  document.getElementById('error-banner').classList.remove('visible');
+}
+</script>
+</body>
+</html>

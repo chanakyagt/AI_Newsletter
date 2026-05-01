@@ -1,0 +1,27 @@
+# Secrets — never commit
+.env
+
+# Virtual environment
+myenv/
+
+# Pipeline data output (generated at runtime, not source code)
+news_output/
+logs/
+pipeline_logs/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Debug / scratch files
+debug_investigation_firecrawl.txt
+
+# URL resolution cache
+url_resolution/__pycache__/
+url_resolution/checkpoint.json
+
+# IDE
+.vscode/
+.idea/

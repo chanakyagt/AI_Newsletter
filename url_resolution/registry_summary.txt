@@ -1,0 +1,62 @@
+═══════════════════════════════════════════════════════════
+  UNIFIED REGISTRY SUMMARY
+  Generated: 2026-04-28 12:51:45
+═══════════════════════════════════════════════════════════
+
+  TOTAL DOMAINS: 1006
+
+  CREDIBILITY DISTRIBUTION
+  ─────────────────────────
+  Tier 5 (UAE Govt)      :    6 domains  — primary truth sources
+  Tier 4 (Major UAE)     :   10 domains  — core newsletter sources
+  Tier 3 (Regional)      :   17 domains  — credible supporting sources
+  Tier 2 (Intl Press)    :   19 domains  — international context
+  Tier 1 (Unknown/Other) :  954 domains  — default, lowest priority
+
+  Note: All domains NOT in Tier 2+ are Tier 1 by default.
+  Tier 1 domains can still appear in the newsletter if no better
+  source covers the same story.
+
+  PAYWALL STATUS
+  ──────────────
+  Free      :  828 domains
+  Paywalled :  167 domains
+  Metered   :   11 domains
+
+  HIGH VALUE FREE  (Tier 3+, free, 50+ articles)
+  ──────────────────────────────────────────────
+  albayan.ae                          Tier 4  free       426 articles
+  alkhaleej.ae                        Tier 4  free       368 articles
+  gulfnews.com                        Tier 4  free       362 articles
+  emaratalyoum.com                    Tier 4  free       291 articles
+  gulfbusiness.com                    Tier 4  free       241 articles
+  mediaoffice.ae                      Tier 5  free       208 articles
+  khaleejtimes.com                    Tier 4  free       199 articles
+  zawya.com                           Tier 4  free       178 articles
+  aletihad.ae                         Tier 3  free       124 articles
+  alwatan.ae                          Tier 3  free       121 articles
+
+  HIGH VALUE PAYWALLED  (Tier 3+, paywalled/metered)
+  ──────────────────────────────────────────────
+  arabianbusiness.com                 Tier 4  paywalled    80 articles
+  reuters.com                         Tier 3  paywalled    63 articles
+  bloomberg.com                       Tier 3  paywalled    49 articles
+  english.alarabiya.net               Tier 3  paywalled     5 articles
+  ft.com                              Tier 3  paywalled     3 articles
+
+  OVERRIDES APPLIED
+  ─────────────────
+  10 domains had inference errors corrected:
+
+  acnnewswire.com                     Tier 2→1  (not CNN, is press wire)
+  aljazeera.net                       Tier 2→3  (Al Jazeera Arabic — same org as aljazeera.com)
+  arabic.cnn.com                      Tier 2→3  (CNN Arabic subdomain)
+  blogs.loc.gov                       Tier 3→1  (US Library of Congress blog — not UAE-relevant)
+  convergence-now.com                 Tier 2→1  (not The Verge)
+  edition.cnn.com                     Tier 2→3  (CNN International subdomain)
+  english.alarabiya.net               Tier 2→3  (Al Arabiya English subdomain)
+  murphy.senate.gov                   Tier 3→1  (US Senator site — not UAE-relevant)
+  slguardian.org                      Tier 2→1  (not The Guardian UK — Sierra Leone paper)
+  thomsonreuters.com                  Tier 2→3  (Thomson Reuters corporate (same as reuters.com))
+
+═══════════════════════════════════════════════════════════
