@@ -406,6 +406,73 @@
     display: inline-block;
   }
   .hist-btn:hover { border-color: var(--blue); color: var(--blue); }
+
+  /* ── History type badges ── */
+  .type-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .type-latest    { background: #e8fff4; color: #009944; border: 1px solid #b3e8cc; }
+  .type-pre-regen { background: #eef0ff; color: #0a00fe; border: 1px solid #c0c8f8; }
+  .type-pre-edit  { background: #f5f5f5; color: #888;    border: 1px solid #ddd; }
+
+  /* ── API health badges (header) ── */
+  .health-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: default;
+  }
+  .health-ok      { background: #e8fff4; color: #009944; border: 1px solid #b3e8cc; }
+  .health-missing { background: #fff0f0; color: #c0392b; border: 1px solid #f0c0c0; }
+
+  /* ── Elapsed timer ── */
+  #elapsed-timer {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: #aaa;
+    margin-right: 8px;
+    display: none;
+  }
+
+  /* ── Summary card ── */
+  #summary-card { display: none; animation: fadeIn .4s ease; }
+  .summary-grid {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 20px;
+  }
+  .summary-tile {
+    flex: 1;
+    min-width: 130px;
+    padding: 14px 16px;
+    background: #f9f9fd;
+    border-radius: 8px;
+    border: 1px solid #ebebf5;
+  }
+  .summary-tile-icon  { font-size: 22px; margin-bottom: 6px; }
+  .summary-tile-label { font-size: 10px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #aaa; }
+  .summary-tile-value { font-size: 18px; font-weight: 700; color: var(--navy); margin-top: 3px; }
+  .summary-tile-sub   { font-size: 11px; color: #aaa; margin-top: 2px; }
+
+  /* ── Error hint + action buttons in banner ── */
+  #error-hint  { font-size: 12px; margin-top: 5px; opacity: .85; line-height: 1.4; }
+  .btn-resume  { background: var(--blue); color: var(--white); }
+  .btn-unlock  { background: transparent; color: var(--amber); border: 1.5px solid var(--amber); }
+
+  /* ── Fresh Run button ── */
+  #fresh-btn { background: transparent; color: #ccc; border: 1.5px solid #444; }
+  #fresh-btn:hover:not(:disabled) { border-color: var(--cyan); color: var(--cyan); }
 </style>
 </head>
 
@@ -417,10 +484,14 @@
     <span class="brand-arabic">نبض</span>
     <span class="brand-en">NABDH &nbsp;·&nbsp; UAE AI Intelligence</span>
   </div>
-  <div style="display:flex;gap:10px;align-items:center;">
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+    <div id="health-badges" style="display:flex;gap:5px;align-items:center;"></div>
     <span id="cancel-wrap" class="visible" style="display:none;">
       <button class="btn btn-outline btn-sm" onclick="cancelPipeline()">⛔ Cancel</button>
     </span>
+    <button id="fresh-btn" class="btn btn-sm" onclick="runFreshPipeline()" title="Clear today's data and run all 7 steps from scratch">
+      🔄 Fresh Run
+    </button>
     <button id="run-btn" class="btn btn-primary" onclick="runPipeline('full')">
       ▶ Run Pipeline
     </button>
@@ -432,16 +503,24 @@
 
   <!-- Error banner -->
   <div id="error-banner">
-    <span style="font-size:18px;">❌</span>
-    <span id="error-text">An error occurred.</span>
-    <button class="btn btn-danger btn-sm" style="margin-left:auto;" onclick="retryPipeline()">Retry</button>
+    <span style="font-size:20px;flex-shrink:0;">❌</span>
+    <div style="flex:1;min-width:0;">
+      <div id="error-text" style="font-weight:600;">An error occurred.</div>
+      <div id="error-hint"></div>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0;flex-wrap:wrap;">
+      <button id="resume-btn"  class="btn btn-resume btn-sm"  style="display:none;" onclick="resumeFromFailed()">↺ Resume</button>
+      <button id="unlock-btn"  class="btn btn-unlock btn-sm"  style="display:none;" onclick="forceUnlock()">🔓 Clear Lock</button>
+      <button class="btn btn-danger btn-sm" onclick="retryPipeline()">🔁 Retry All</button>
+    </div>
   </div>
 
   <!-- Progress card -->
   <div class="card">
     <div class="card-header">
       <span class="card-title">Pipeline Progress</span>
-      <span>
+      <span style="display:flex;align-items:center;">
+        <span id="elapsed-timer"></span>
         <span class="status-dot" id="status-dot"></span>
         <span id="status-label" style="font-size:12px;color:#888;margin-left:6px;">Idle</span>
       </span>
@@ -488,7 +567,11 @@
   <div class="card">
     <div class="card-header">
       <span class="card-title">Live Log</span>
-      <button class="btn btn-outline btn-sm" onclick="clearLog()" style="font-size:11px;padding:4px 10px;color:#666;border-color:#ddd;">Clear</button>
+      <div style="display:flex;gap:6px;">
+        <button id="download-logs-btn" class="btn btn-outline btn-sm" onclick="downloadLogs()"
+                style="display:none;font-size:11px;padding:4px 10px;color:#666;border-color:#ddd;">⬇ Download Logs</button>
+        <button class="btn btn-outline btn-sm" onclick="clearLog()" style="font-size:11px;padding:4px 10px;color:#666;border-color:#ddd;">Clear</button>
+      </div>
     </div>
     <div class="log-box" id="log-box">
       <div class="log-empty" id="log-empty">Waiting for pipeline to start...</div>
@@ -518,6 +601,14 @@
         ↺ Regenerate Editorial Only
       </button>
     </div>
+  </div>
+
+  <!-- Edition summary card -->
+  <div class="card" id="summary-card">
+    <div class="card-header">
+      <span class="card-title">This Edition — At a Glance</span>
+    </div>
+    <div class="summary-grid" id="summary-grid"></div>
   </div>
 
   <!-- Edit mode container -->
@@ -551,13 +642,15 @@
   <!-- Past newsletters -->
   <div class="card" id="history-card">
     <div class="card-header">
-      <span class="card-title">Past Newsletters</span>
+      <span class="card-title">Newsletter History</span>
+      <span style="font-size:11px;color:#aaa;">All versions — latest, editorial regens, edits</span>
     </div>
     <table class="history-table" id="history-table">
       <thead>
         <tr>
           <th>Date</th>
-          <th>File</th>
+          <th>Version</th>
+          <th>Saved At</th>
           <th>Size</th>
           <th></th>
         </tr>
@@ -572,9 +665,16 @@
 // ── State ─────────────────────────────────────────────────────────────────
 let es = null;
 let currentStatus = 'idle';
+let _failedStep   = null;
+let _timerInterval = null;
+let _timerStartMs  = null;
 
 // ── Init ─────────────────────────────────────────────────────────────────
-window.addEventListener('load', checkStatusOnLoad);
+window.addEventListener('load', () => {
+  checkStatusOnLoad();
+  loadHealth();
+  requestNotificationPermission();
+});
 
 async function checkStatusOnLoad() {
   const res    = await fetch('/api/status');
@@ -584,18 +684,27 @@ async function checkStatusOnLoad() {
   if (status.status === 'running') {
     setUIRunning(true);
     setStatusDot('running', 'Running');
+    setTabTitle('running');
     if (status.progress) setProgress(status.progress, status.current_step || '');
+    if (status.started_at_ts) startTimer(status.started_at_ts * 1000);
     startStreaming();
   } else if (status.status === 'done') {
     setStatusDot('done', 'Done');
+    setTabTitle('done');
     setProgress(100, 'Complete');
+    document.getElementById('download-logs-btn').style.display = 'inline-flex';
   } else if (status.status === 'error') {
     setStatusDot('error', 'Error');
-    showError(status.error || 'An error occurred.');
+    setTabTitle('error');
+    showError(status.error || 'An error occurred.', status.error_hint, status.failed_step);
   }
 
   if (status.newsletter_ready) {
     showNewsletterCard(status.newsletter_name);
+  }
+
+  if (status.summary && Object.keys(status.summary).length > 0) {
+    showSummary(status.summary);
   }
 
   loadHistory();
@@ -603,16 +712,25 @@ async function checkStatusOnLoad() {
 
 // ── Pipeline actions ──────────────────────────────────────────────────────
 async function runPipeline(mode = 'full') {
-  const endpoints = { full: '/api/run', newsletter: '/api/run/newsletter', editorial: '/api/run/editorial' };
+  const endpoints = {
+    full:         '/api/run',
+    'full-fresh': '/api/run?force=true',
+    newsletter:   '/api/run/newsletter',
+    editorial:    '/api/run/editorial',
+  };
   hideError();
   hideNewsletterCard();
+  hideSummary();
   exitEditMode(true);
   resetSteps();
   clearLog();
   setProgress(0, 'Starting...');
   setStatusDot('running', 'Running');
+  setTabTitle('running');
   setUIRunning(true);
+  startTimer();
   currentStatus = 'running';
+  document.getElementById('download-logs-btn').style.display = 'none';
 
   const res  = await fetch(endpoints[mode], { method: 'POST' });
   const data = await res.json();
@@ -620,16 +738,70 @@ async function runPipeline(mode = 'full') {
     showError(data.error);
     setUIRunning(false);
     setStatusDot('error', 'Error');
+    setTabTitle('error');
+    stopTimer();
     currentStatus = 'error';
     return;
   }
   startStreaming();
 }
 
+function runFreshPipeline() {
+  if (currentStatus === 'running') return;
+  if (!confirm(
+    'Fresh Run will delete ALL of today\'s fetched data and restart all 7 steps from scratch.\n\n' +
+    'This takes 18–25 minutes. Are you sure?'
+  )) return;
+  runPipeline('full-fresh');
+}
+
+async function resumeFromFailed() {
+  if (!_failedStep) return;
+  hideError();
+  hideSummary();
+  resetSteps();
+  clearLog();
+  setProgress(0, `Resuming from Step ${_failedStep}...`);
+  setStatusDot('running', 'Running');
+  setTabTitle('running');
+  setUIRunning(true);
+  startTimer();
+  currentStatus = 'running';
+  document.getElementById('download-logs-btn').style.display = 'none';
+
+  const res  = await fetch(`/api/run/resume?from_step=${_failedStep}`, { method: 'POST' });
+  const data = await res.json();
+  if (data.error) {
+    showError(data.error);
+    setUIRunning(false);
+    setStatusDot('error', 'Error');
+    setTabTitle('error');
+    stopTimer();
+    return;
+  }
+  startStreaming();
+}
+
+async function forceUnlock() {
+  const res  = await fetch('/api/force-unlock', { method: 'POST' });
+  const data = await res.json();
+  if (data.ok) {
+    hideError();
+    setStatusDot('idle', 'Idle');
+    setTabTitle('idle');
+    setUIRunning(false);
+    showToast('🔓 Lock cleared — you can now run the pipeline.', 'success');
+  } else {
+    showToast('⚠️ ' + (data.error || 'Could not clear lock'), 'warning');
+  }
+}
+
 async function cancelPipeline() {
   await fetch('/api/cancel', { method: 'POST' });
   setUIRunning(false);
   setStatusDot('idle', 'Idle');
+  setTabTitle('idle');
+  stopTimer();
   currentStatus = 'idle';
 }
 
@@ -663,18 +835,32 @@ function startStreaming() {
       es.close(); es = null;
       setUIRunning(false);
       setStatusDot('done', 'Done');
+      setTabTitle('done');
       setProgress(100, '🎉 Newsletter ready');
+      stopTimer();
       currentStatus = 'done';
+      document.getElementById('download-logs-btn').style.display = 'inline-flex';
       showNewsletterCard();
       loadHistory();
+      sendNotification('NABDH Newsletter Ready 🎉', 'Your UAE AI intelligence brief is ready to open and download.');
+      // Pull summary from server
+      fetch('/api/status').then(r => r.json()).then(d => {
+        if (d.summary && Object.keys(d.summary).length > 0) showSummary(d.summary);
+      }).catch(() => {});
     }
 
     if (data.type === 'error') {
       es.close(); es = null;
       setUIRunning(false);
       setStatusDot('error', 'Error');
+      setTabTitle('error');
+      stopTimer();
       currentStatus = 'error';
-      showError(data.text);
+      document.getElementById('download-logs-btn').style.display = 'inline-flex';
+      // Pull full error details from server (SSE text may be truncated)
+      fetch('/api/status').then(r => r.json()).then(d => {
+        showError(d.error || data.text, d.error_hint, d.failed_step);
+      }).catch(() => { showError(data.text); });
     }
   };
 
@@ -686,6 +872,12 @@ function startStreaming() {
         if (es) { es.close(); es = null; }
         setUIRunning(false);
         currentStatus = d.status;
+        if (d.status === 'done' && d.newsletter_ready) {
+          setStatusDot('done', 'Done');
+          setProgress(100, '🎉 Newsletter ready');
+          showNewsletterCard(d.newsletter_name);
+          loadHistory();
+        }
       }
     }, 2000);
   };
@@ -766,6 +958,7 @@ function setStatusDot(state, label) {
 function setUIRunning(running) {
   document.getElementById('run-btn').disabled    = running;
   document.getElementById('run-btn').textContent = running ? '⏳ Running...' : '▶ Run Pipeline';
+  document.getElementById('fresh-btn').disabled  = running;
   document.getElementById('cancel-wrap').style.display = running ? 'inline-flex' : 'none';
 }
 
@@ -799,13 +992,36 @@ function downloadNewsletter() {
 }
 
 // ── Error ─────────────────────────────────────────────────────────────────
-function showError(msg) {
+function showError(msg, hint, failedStep) {
   document.getElementById('error-text').textContent = msg || 'An error occurred.';
+
+  const hintEl = document.getElementById('error-hint');
+  hintEl.textContent = hint || '';
+
+  const resumeBtn = document.getElementById('resume-btn');
+  const unlockBtn = document.getElementById('unlock-btn');
+
+  // Show resume button only when a specific step failed (not lock / cancellation errors)
+  if (failedStep && failedStep >= 1 && failedStep <= 7) {
+    _failedStep = failedStep;
+    resumeBtn.textContent = `↺ Resume from Step ${failedStep}`;
+    resumeBtn.style.display = 'inline-flex';
+  } else {
+    resumeBtn.style.display = 'none';
+  }
+
+  // Show unlock button when message mentions "already running"
+  unlockBtn.style.display = (msg || '').toLowerCase().includes('already running')
+    ? 'inline-flex' : 'none';
+
   document.getElementById('error-banner').classList.add('visible');
 }
 
 function hideError() {
   document.getElementById('error-banner').classList.remove('visible');
+  document.getElementById('error-hint').textContent = '';
+  document.getElementById('resume-btn').style.display = 'none';
+  document.getElementById('unlock-btn').style.display = 'none';
 }
 
 // ── EDIT MODE ─────────────────────────────────────────────────────────────
@@ -942,6 +1158,116 @@ function showToast(message, type = 'success') {
   setTimeout(() => t.remove(), 4000);
 }
 
+// ── Health badges ─────────────────────────────────────────────────────────
+async function loadHealth() {
+  try {
+    const res  = await fetch('/api/health');
+    const data = await res.json();
+    const wrap = document.getElementById('health-badges');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    const services = [
+      { key: 'deepseek',  label: 'DeepSeek' },
+      { key: 'openai',    label: 'OpenAI'   },
+      { key: 'firecrawl', label: 'Firecrawl'},
+    ];
+    services.forEach(svc => {
+      const ok  = data.keys[svc.key];
+      const el  = document.createElement('span');
+      el.className   = 'health-badge ' + (ok ? 'health-ok' : 'health-missing');
+      el.title       = ok ? `${svc.label}: API key configured ✓`
+                          : `${svc.label}: API key MISSING — pipeline will fail`;
+      el.textContent = (ok ? '✓ ' : '✗ ') + svc.label;
+      wrap.appendChild(el);
+    });
+  } catch(e) {}
+}
+
+// ── Elapsed timer ─────────────────────────────────────────────────────────
+function startTimer(startMs) {
+  _timerStartMs = startMs || Date.now();
+  const el = document.getElementById('elapsed-timer');
+  el.style.display = 'inline';
+  clearInterval(_timerInterval);
+  _timerInterval = setInterval(() => {
+    const sec = Math.floor((Date.now() - _timerStartMs) / 1000);
+    const m   = Math.floor(sec / 60).toString().padStart(2, '0');
+    const s   = (sec % 60).toString().padStart(2, '0');
+    el.textContent = `${m}:${s} · `;
+  }, 1000);
+}
+
+function stopTimer() {
+  clearInterval(_timerInterval);
+  _timerInterval = null;
+  const el = document.getElementById('elapsed-timer');
+  if (el) el.style.display = 'none';
+}
+
+// ── Tab title ─────────────────────────────────────────────────────────────
+function setTabTitle(state) {
+  const t = { running: '⏳ Running — NABDH', done: '✅ Ready — NABDH',
+              error: '❌ Error — NABDH',   idle: 'NABDH — Pipeline' };
+  document.title = t[state] || 'NABDH — Pipeline';
+}
+
+// ── Browser notification ──────────────────────────────────────────────────
+function requestNotificationPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+}
+
+function sendNotification(title, body) {
+  if ('Notification' in window && Notification.permission === 'granted') {
+    new Notification(title, { body });
+  }
+}
+
+// ── Summary card ──────────────────────────────────────────────────────────
+function showSummary(s) {
+  const grid = document.getElementById('summary-grid');
+  const card = document.getElementById('summary-card');
+  if (!grid || !card) return;
+
+  const tiles = [];
+  if (s.articles_fetched)
+    tiles.push({ icon: '📡', label: 'Fetched',    value: s.articles_fetched, sub: 'articles from RSS feeds' });
+  if (s.articles_unique)
+    tiles.push({ icon: '🔍', label: 'Unique',     value: s.articles_unique,  sub: `of ${s.articles_total || '?'} total after dedup` });
+  if (s.articles_scored)
+    tiles.push({ icon: '⭐', label: 'Selected',   value: s.articles_scored,  sub: 'scored for the newsletter' });
+  if (s.full_content || s.rss_fallback) {
+    const full = s.full_content || 0;
+    const rss  = s.rss_fallback  || 0;
+    tiles.push({ icon: '🕷️', label: 'Full Content', value: full, sub: `${rss} used RSS summary` });
+  }
+  if (s.keypoints)
+    tiles.push({ icon: '🧠', label: 'Analysed',  value: s.keypoints, sub: 'articles extracted for intelligence' });
+
+  if (tiles.length === 0) return;
+
+  grid.innerHTML = tiles.map(t => `
+    <div class="summary-tile">
+      <div class="summary-tile-icon">${t.icon}</div>
+      <div class="summary-tile-label">${t.label}</div>
+      <div class="summary-tile-value">${t.value}</div>
+      <div class="summary-tile-sub">${t.sub}</div>
+    </div>
+  `).join('');
+  card.style.display = 'block';
+}
+
+function hideSummary() {
+  const card = document.getElementById('summary-card');
+  if (card) card.style.display = 'none';
+}
+
+// ── Download logs ─────────────────────────────────────────────────────────
+function downloadLogs() {
+  window.location.href = '/api/logs/latest';
+}
+
 // ── History ───────────────────────────────────────────────────────────────
 async function loadHistory() {
   try {
@@ -955,11 +1281,19 @@ async function loadHistory() {
     const tbody = document.getElementById('history-body');
     tbody.innerHTML = '';
 
+    const typeMap = {
+      'latest':    ['Latest',       'type-latest'],
+      'pre-regen': ['Pre-Regen',    'type-pre-regen'],
+      'pre-edit':  ['Pre-Edit',     'type-pre-edit'],
+    };
+
     rows.forEach(row => {
+      const [label, cls] = typeMap[row.type] || ['Unknown', 'type-pre-edit'];
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td>${row.date}</td>
-        <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#888;">${row.name}</td>
+        <td><span class="type-badge ${cls}">${label}</span></td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#888;">${row.modified}</td>
         <td style="color:#aaa;">${row.size_kb} KB</td>
         <td><div class="hist-actions">
           <a class="hist-btn" href="/api/newsletter?file=${encodeURIComponent(row.name)}" target="_blank">Open</a>

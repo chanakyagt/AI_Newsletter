@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,16 +30,23 @@ pipeline_state: dict = {
     "status": "idle",
     "mode": None,
     "started_at": None,
+    "started_at_ts": None,
     "finished_at": None,
     "current_step": None,
     "progress": 0,
     "error": None,
+    "error_hint": None,
+    "failed_step": None,
+    "summary": {},
     "newsletter_path": None,
+    "log_file": None,
 }
 
 log_queue: asyncio.Queue = None
 active_process: subprocess.Popen = None
 _loop: asyncio.AbstractEventLoop = None
+_last_error_hint: str = ""
+_log_buffer: list = []
 
 # ── Steps ─────────────────────────────────────────────────────────────────────
 
@@ -78,6 +86,7 @@ def _ts() -> str:
 def _push(event: dict) -> None:
     if _loop is None or log_queue is None:
         return
+    _log_buffer.append(event)
     asyncio.run_coroutine_threadsafe(_safe_put(event), _loop)
 
 
@@ -138,8 +147,10 @@ def _find_newsletter(file: str = None) -> str | None:
             if p.exists():
                 return str(p)
         else:
+            # Only the primary file (no backups/edits) for the "current newsletter"
             candidates = sorted(
-                newsletter_dir.glob("nabdh_*.html"),
+                [p for p in newsletter_dir.glob("nabdh_*.html")
+                 if "_backup_" not in p.name and "_edit_" not in p.name],
                 key=lambda p: p.stat().st_mtime,
                 reverse=True,
             )
@@ -309,10 +320,56 @@ def _humanise(line: str, step: int) -> str | None:
     return l
 
 
+# ── Summary extraction ────────────────────────────────────────────────────────
+
+def _extract_summary(text: str, step_num: int) -> None:
+    s = pipeline_state["summary"]
+    if step_num == 1 and "Found" in text and "articles" in text:
+        m = re.search(r"Found (\d+) articles", text)
+        if m:
+            s["articles_fetched"] = s.get("articles_fetched", 0) + int(m.group(1))
+    elif step_num == 3 and "Deduplication done" in text:
+        m = re.search(r"(\d+) total.*?(\d+) unique", text)
+        if m:
+            s["articles_total"] = int(m.group(1))
+            s["articles_unique"] = int(m.group(2))
+    elif step_num == 4 and "Scoring done" in text:
+        m = re.search(r"(\d+) articles selected", text)
+        if m:
+            s["articles_scored"] = int(m.group(1))
+    elif step_num == 5:
+        if "✓ Fetched:" in text:
+            s["full_content"] = s.get("full_content", 0) + 1
+        elif "RSS summary" in text:
+            s["rss_fallback"] = s.get("rss_fallback", 0) + 1
+    elif step_num == 6 and "Processed:" in text:
+        s["keypoints"] = s.get("keypoints", 0) + 1
+
+
+def _save_run_log() -> str | None:
+    global _log_buffer
+    if not _log_buffer:
+        return None
+    log_dir = ROOT / "pipeline_logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_path = log_dir / f"run_{ts}.txt"
+    try:
+        with open(log_path, "w", encoding="utf-8") as f:
+            for ev in _log_buffer:
+                if ev.get("type") == "ping":
+                    continue
+                f.write(f"[{ev.get('timestamp', '')}] {ev.get('text', '')}\n")
+        return str(log_path)
+    except Exception:
+        return None
+
+
 # ── Subprocess runner ─────────────────────────────────────────────────────────
 
 def _run_script_streaming(script_name: str, step_num: int, step_label: str, news_date: str) -> int:
-    global active_process
+    global active_process, _last_error_hint
+    _last_error_hint = ""
     env = {
         **os.environ,
         "PYTHONIOENCODING": "utf-8",
@@ -335,31 +392,52 @@ def _run_script_streaming(script_name: str, step_num: int, step_label: str, news
         human = _humanise(line, step_num)
         if human is None:
             continue
-        _push({
+        event = {
             "type": "log",
             "text": human,
             "step": step_num,
             "progress": None,
             "timestamp": _ts(),
-        })
+        }
+        _push(event)
+        _log_buffer.append(event)
+        _extract_summary(human, step_num)
+        if "❌" in human or "⚠️" in human or "[ERROR]" in line or "error" in line.lower():
+            _last_error_hint = human.strip().lstrip("❌⚠️ ").strip()
     active_process.wait()
     return active_process.returncode
 
 
 # ── Pipeline runners ──────────────────────────────────────────────────────────
 
-def _run_full_pipeline(force_fresh: bool = False) -> None:
-    global pipeline_state
+def _run_full_pipeline(force_fresh: bool = False, from_step: int = 1) -> None:
+    global pipeline_state, _log_buffer
     try:
         today = _today()
         if force_fresh:
             _clean_for_fresh_run(today)
+        elif from_step > 1:
+            _push({"type": "log",
+                   "text": f"📅 Date: {today} — resuming from Step {from_step}",
+                   "step": 0, "progress": 0, "timestamp": _ts()})
         else:
             _push({"type": "log",
                    "text": f"📅 Date: {today} — resuming from last completed step",
                    "step": 0, "progress": 0, "timestamp": _ts()})
 
         for step_num, script, label in STEPS:
+            # Skip steps explicitly before our start point
+            if step_num < from_step:
+                _push({
+                    "type": "step_done",
+                    "text": f"⏭ {label} — skipped",
+                    "step": step_num,
+                    "progress": STEP_PROGRESS[step_num] + 5,
+                    "timestamp": _ts(),
+                })
+                pipeline_state["progress"] = STEP_PROGRESS[step_num] + 5
+                continue
+
             # Resume: skip steps that already have output for today
             if not force_fresh and _step_done(step_num, today):
                 _push({
@@ -386,13 +464,17 @@ def _run_full_pipeline(force_fresh: bool = False) -> None:
 
             if rc != 0:
                 pipeline_state["status"] = "error"
-                pipeline_state["error"] = f"{label} failed (exit code {rc})"
+                pipeline_state["failed_step"] = step_num
+                pipeline_state["error"] = f"Step {step_num} — {label} failed"
+                pipeline_state["error_hint"] = _last_error_hint or f"Process exited with code {rc}"
                 pipeline_state["finished_at"] = datetime.now().isoformat()
+                pipeline_state["log_file"] = _save_run_log()
                 _push({
                     "type": "error",
                     "text": f"❌ {label} failed. Check logs above.",
                     "step": step_num,
                     "progress": STEP_PROGRESS[step_num],
+                    "failed_step": step_num,
                     "timestamp": _ts(),
                 })
                 return
@@ -408,6 +490,7 @@ def _run_full_pipeline(force_fresh: bool = False) -> None:
         pipeline_state["status"] = "done"
         pipeline_state["progress"] = 100
         pipeline_state["finished_at"] = datetime.now().isoformat()
+        pipeline_state["log_file"] = _save_run_log()
         _refresh_newsletter_path()
         _push({
             "type": "done",
@@ -438,13 +521,17 @@ def _run_newsletter_only() -> None:
 
         if rc != 0:
             pipeline_state["status"] = "error"
-            pipeline_state["error"] = f"{label} failed (exit code {rc})"
+            pipeline_state["failed_step"] = step_num
+            pipeline_state["error"] = f"Step {step_num} — {label} failed"
+            pipeline_state["error_hint"] = _last_error_hint or f"Process exited with code {rc}"
             pipeline_state["finished_at"] = datetime.now().isoformat()
+            pipeline_state["log_file"] = _save_run_log()
             _push({
                 "type": "error",
                 "text": f"❌ {label} failed. Check logs above.",
                 "step": step_num,
                 "progress": STEP_PROGRESS[step_num],
+                "failed_step": step_num,
                 "timestamp": _ts(),
             })
             return
@@ -452,6 +539,7 @@ def _run_newsletter_only() -> None:
         pipeline_state["status"] = "done"
         pipeline_state["progress"] = 100
         pipeline_state["finished_at"] = datetime.now().isoformat()
+        pipeline_state["log_file"] = _save_run_log()
         _refresh_newsletter_path()
         _push({
             "type": "done",
@@ -506,13 +594,17 @@ def _run_editorial_only() -> None:
 
         if rc != 0:
             pipeline_state["status"] = "error"
-            pipeline_state["error"] = f"Editorial regeneration failed (exit code {rc})"
+            pipeline_state["failed_step"] = 7
+            pipeline_state["error"] = "Editorial regeneration failed"
+            pipeline_state["error_hint"] = _last_error_hint or f"Process exited with code {rc}"
             pipeline_state["finished_at"] = datetime.now().isoformat()
+            pipeline_state["log_file"] = _save_run_log()
             _push({
                 "type": "error",
                 "text": "❌ Editorial regeneration failed. Check logs above.",
                 "step": 7,
                 "progress": 50,
+                "failed_step": 7,
                 "timestamp": _ts(),
             })
             return
@@ -520,6 +612,7 @@ def _run_editorial_only() -> None:
         pipeline_state["status"] = "done"
         pipeline_state["progress"] = 100
         pipeline_state["finished_at"] = datetime.now().isoformat()
+        pipeline_state["log_file"] = _save_run_log()
         _refresh_newsletter_path()
         _push({
             "type": "done",
@@ -563,8 +656,12 @@ async def get_status():
         "progress":         pipeline_state["progress"],
         "current_step":     pipeline_state["current_step"],
         "started_at":       pipeline_state["started_at"],
+        "started_at_ts":    pipeline_state["started_at_ts"],
         "finished_at":      pipeline_state["finished_at"],
         "error":            pipeline_state["error"],
+        "error_hint":       pipeline_state["error_hint"],
+        "failed_step":      pipeline_state["failed_step"],
+        "summary":          pipeline_state["summary"],
         "newsletter_ready": newsletter is not None,
         "newsletter_name":  Path(newsletter).name if newsletter else None,
         "newsletter_path":  newsletter,
@@ -577,18 +674,26 @@ def _start_thread(target) -> None:
 
 @app.post("/api/run")
 async def run_pipeline(force: bool = False):
+    global _log_buffer
     if pipeline_state["status"] == "running":
         return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
     if not _acquire_lock():
         return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
+    _log_buffer = []
+    now = datetime.now()
     pipeline_state.update({
         "status": "running",
         "mode": "full" if not force else "full-fresh",
         "progress": 0,
-        "started_at": datetime.now().isoformat(),
+        "started_at": now.isoformat(),
+        "started_at_ts": now.timestamp(),
         "finished_at": None,
         "error": None,
+        "error_hint": None,
+        "failed_step": None,
+        "summary": {},
         "current_step": None,
+        "log_file": None,
     })
     _start_thread(lambda: _run_full_pipeline(force_fresh=force))
     return {"ok": True}
@@ -596,18 +701,26 @@ async def run_pipeline(force: bool = False):
 
 @app.post("/api/run/newsletter")
 async def run_newsletter():
+    global _log_buffer
     if pipeline_state["status"] == "running":
         return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
     if not _acquire_lock():
         return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
+    _log_buffer = []
+    now = datetime.now()
     pipeline_state.update({
         "status": "running",
         "mode": "newsletter",
         "progress": 0,
-        "started_at": datetime.now().isoformat(),
+        "started_at": now.isoformat(),
+        "started_at_ts": now.timestamp(),
         "finished_at": None,
         "error": None,
+        "error_hint": None,
+        "failed_step": None,
+        "summary": {},
         "current_step": None,
+        "log_file": None,
     })
     _start_thread(_run_newsletter_only)
     return {"ok": True}
@@ -615,18 +728,26 @@ async def run_newsletter():
 
 @app.post("/api/run/editorial")
 async def run_editorial():
+    global _log_buffer
     if pipeline_state["status"] == "running":
         return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
     if not _acquire_lock():
         return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
+    _log_buffer = []
+    now = datetime.now()
     pipeline_state.update({
         "status": "running",
         "mode": "editorial",
         "progress": 0,
-        "started_at": datetime.now().isoformat(),
+        "started_at": now.isoformat(),
+        "started_at_ts": now.timestamp(),
         "finished_at": None,
         "error": None,
+        "error_hint": None,
+        "failed_step": None,
+        "summary": {},
         "current_step": None,
+        "log_file": None,
     })
     _start_thread(_run_editorial_only)
     return {"ok": True}
@@ -669,9 +790,10 @@ async def get_newsletter(file: str = None, download: bool = False):
     if file:
         if not file.startswith("nabdh_") or "/" in file or "\\" in file:
             return JSONResponse({"error": "Invalid filename"}, status_code=400)
-        path = ROOT / "news_output" / "newsletter" / file
-        if not path.exists():
+        found = _find_newsletter(file)
+        if not found:
             return JSONResponse({"error": "File not found"}, status_code=404)
+        path = Path(found)
     else:
         found = _find_newsletter()
         if not found:
@@ -724,7 +846,7 @@ async def save_newsletter_edits(request: Request):
 @app.get("/api/history")
 async def get_history():
     news_output = ROOT / "news_output"
-    all_files = []
+    all_files: list[Path] = []
 
     # Search dated dirs (news_output/YYYY-MM-DD/newsletter/)
     try:
@@ -732,32 +854,118 @@ async def get_history():
             if d.is_dir() and len(d.name) == 10 and d.name[4] == "-":
                 nl_dir = d / "newsletter"
                 if nl_dir.exists():
-                    all_files.extend(
-                        f for f in nl_dir.glob("nabdh_????-??-??.html")
-                        if "_edit_" not in f.name
-                    )
+                    all_files.extend(nl_dir.glob("nabdh_*.html"))
     except Exception:
         pass
 
     # Legacy flat dir fallback (local dev)
     legacy = news_output / "newsletter"
     if legacy.exists():
-        all_files.extend(
-            f for f in legacy.glob("nabdh_????-??-??.html")
-            if "_edit_" not in f.name
-        )
+        all_files.extend(legacy.glob("nabdh_*.html"))
 
-    files = sorted(all_files, key=lambda f: f.stat().st_mtime, reverse=True)[:10]
+    # Deduplicate by resolved path
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for f in all_files:
+        key = str(f.resolve())
+        if key not in seen:
+            seen.add(key)
+            unique.append(f)
+
+    files = sorted(unique, key=lambda f: f.stat().st_mtime, reverse=True)[:40]
+
+    def _classify(name: str) -> str:
+        if "_backup_" in name:
+            return "pre-regen"
+        elif "_edit_" in name:
+            return "pre-edit"
+        else:
+            return "latest"
+
+    def _base_date(name: str) -> str:
+        m = re.match(r"nabdh_(\d{4}-\d{2}-\d{2})", name)
+        return m.group(1) if m else "unknown"
 
     return {"newsletters": [
         {
             "name":     f.name,
-            "date":     f.stem.replace("nabdh_", ""),
+            "date":     _base_date(f.name),
             "size_kb":  round(f.stat().st_size / 1024, 1),
             "modified": datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+            "type":     _classify(f.name),
         }
         for f in files
     ]}
+
+
+@app.get("/api/health")
+async def health_check():
+    keys = {
+        "deepseek": bool(
+            os.environ.get("DeepSeek_API_Key_1") or os.environ.get("Deepseek_API_Key_1")
+        ),
+        "openai":   bool(os.environ.get("OPENAI_API_KEY_1")),
+        "firecrawl": bool(os.environ.get("FIRECRAWL_API_KEY")),
+    }
+    return {"keys": keys, "all_ok": all(keys.values())}
+
+
+@app.post("/api/force-unlock")
+async def force_unlock():
+    if pipeline_state["status"] == "running":
+        return JSONResponse(
+            {"error": "Pipeline appears to be actively running — cancel it first."},
+            status_code=409,
+        )
+    _release_lock()
+    pipeline_state["status"] = "idle"
+    pipeline_state["error"] = None
+    return {"ok": True}
+
+
+@app.post("/api/run/resume")
+async def run_resume(from_step: int = 1):
+    global _log_buffer
+    if from_step < 1 or from_step > 7:
+        return JSONResponse({"error": "from_step must be between 1 and 7"}, status_code=400)
+    if pipeline_state["status"] == "running":
+        return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
+    if not _acquire_lock():
+        return JSONResponse({"error": "Pipeline is already running. Wait for it to finish."}, status_code=409)
+    _log_buffer = []
+    now = datetime.now()
+    pipeline_state.update({
+        "status": "running",
+        "mode": f"resume-from-{from_step}",
+        "progress": 0,
+        "started_at": now.isoformat(),
+        "started_at_ts": now.timestamp(),
+        "finished_at": None,
+        "error": None,
+        "error_hint": None,
+        "failed_step": None,
+        "summary": {},
+        "current_step": None,
+        "log_file": None,
+    })
+    _start_thread(lambda: _run_full_pipeline(force_fresh=False, from_step=from_step))
+    return {"ok": True}
+
+
+@app.get("/api/logs/latest")
+async def get_latest_log():
+    log_path = pipeline_state.get("log_file")
+    if not log_path or not Path(log_path).exists():
+        log_dir = ROOT / "pipeline_logs"
+        if not log_dir.exists():
+            return JSONResponse({"error": "No log files found yet"}, status_code=404)
+        logs = sorted(log_dir.glob("run_*.txt"), key=lambda f: f.stat().st_mtime, reverse=True)
+        if not logs:
+            return JSONResponse({"error": "No log files found yet"}, status_code=404)
+        log_path = str(logs[0])
+    name = Path(log_path).name
+    return FileResponse(log_path, media_type="text/plain",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 # RAILWAY DEPLOYMENT CHECKLIST
